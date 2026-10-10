@@ -1,0 +1,368 @@
+Lab 9: Automating Host Registration with Boot ISO
+Objectives
+By the end of this lab, you will be able to:
+
+• Create a boot ISO for Red Hat Satellite using Foreman • Configure automated host registration using discovery images • Use the boot ISO to automatically register systems with Satellite • Implement automated discovery and registration workflows for new systems • Troubleshoot common issues with automated host registration
+
+Prerequisites
+Before starting this lab, you should have:
+
+• Basic understanding of Linux system administration • Familiarity with Red Hat Satellite or Foreman concepts • Knowledge of virtualization and ISO mounting • Understanding of DHCP and PXE boot concepts • Access to command-line interface and text editors
+
+Lab Environment
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines for this lab. Simply click Start Lab to access your environment - no need to build your own virtual machines or install software.
+
+Your lab environment includes: • Foreman/Satellite server (foreman.example.com) • Target host for registration (client.example.com) • Pre-configured network settings and repositories
+
+Task 1: Create a Boot ISO for Satellite
+Subtask 1.1: Access the Foreman Web Interface
+Open your web browser and navigate to the Foreman server:
+https://foreman.example.com
+Log in with the provided credentials:
+
+Username: admin
+Password: admin123
+Verify you can access the main dashboard and see the Foreman interface.
+
+Subtask 1.2: Install Discovery Plugin
+SSH into the Foreman server:
+ssh root@foreman.example.com
+Install the Foreman Discovery plugin:
+foreman-installer --enable-foreman-plugin-discovery \
+                  --enable-foreman-proxy-plugin-discovery
+Restart the Foreman services:
+systemctl restart httpd
+systemctl restart foreman-proxy
+Verify the plugin installation:
+foreman-rake db:seed
+Subtask 1.3: Configure Discovery Settings
+In the Foreman web interface, navigate to Administer → Settings → Discovery.
+
+Configure the following discovery settings:
+
+discovery_fact: Set to discovery_bootif
+discovery_auto: Set to true
+discovery_hostname: Set to discovery
+discovery_prefix: Set to mac
+Click Submit to save the settings.
+
+Subtask 1.4: Create Discovery Image
+On the Foreman server, create a directory for the discovery image:
+mkdir -p /var/lib/tftpboot/boot
+cd /var/lib/tftpboot/boot
+Download the Foreman Discovery image:
+wget https://downloads.theforeman.org/discovery/releases/latest/fdi-image-latest.tar
+Extract the discovery image:
+tar -xf fdi-image-latest.tar
+Create the boot ISO using the discovery image:
+foreman-discovery-image \
+  --output /tmp/discovery-boot.iso \
+  --kernel /var/lib/tftpboot/boot/fdi-image/vmlinuz0 \
+  --initrd /var/lib/tftpboot/boot/fdi-image/initrd0.img \
+  --foreman-url https://foreman.example.com \
+  --type iso
+Subtask 1.5: Customize Boot ISO Parameters
+Create a custom boot configuration file:
+cat > /tmp/discovery-boot.cfg << 'EOF'
+default discovery
+label discovery
+  kernel vmlinuz0
+  append initrd=initrd0.img root=live:CDLABEL=FDIROOT rootfstype=auto ro rd.live.image acpi=force rd.luks=0 rd.md=0 rd.dm=0 rd.lvm=0 rd.bootif=0 rd.neednet=0 nomodeset proxy.url=https://foreman.example.com proxy.type=foreman
+  ipappend 2
+EOF
+Generate the final boot ISO with custom parameters:
+genisoimage -o /tmp/foreman-discovery.iso \
+  -b isolinux/isolinux.bin \
+  -c isolinux/boot.cat \
+  -no-emul-boot \
+  -boot-load-size 4 \
+  -boot-info-table \
+  -V "FDIROOT" \
+  /var/lib/tftpboot/boot/fdi-image/
+Task 2: Use Boot ISO to Automatically Register a System
+Subtask 2.1: Prepare Target System
+Access the target system (client.example.com) console or create a new virtual machine.
+
+Configure the system to boot from the ISO:
+
+Mount the /tmp/foreman-discovery.iso file
+Set the boot order to prioritize CD/DVD
+Ensure the target system has network connectivity to the Foreman server.
+
+Subtask 2.2: Boot from Discovery ISO
+Start the target system and boot from the discovery ISO.
+
+The system will automatically boot into the discovery environment. You should see output similar to:
+
+Starting Foreman Discovery Image...
+Detecting hardware...
+Configuring network...
+Registering with Foreman server...
+Wait for the discovery process to complete. The system will appear in the Foreman web interface.
+Subtask 2.3: Verify Discovery in Foreman
+In the Foreman web interface, navigate to Hosts → Discovered Hosts.
+
+You should see the newly discovered host with details such as:
+
+Name: Based on MAC address or hostname
+IP Address: Assigned by DHCP
+MAC Address: Physical network interface
+Facts: Hardware and system information
+Click on the discovered host to view detailed facts and hardware information.
+
+Subtask 2.4: Convert Discovered Host to Managed Host
+Select the discovered host and click Provision.
+
+Configure the host provisioning settings:
+
+Host Details:
+  Name: client01.example.com
+  Host Group: default
+  Environment: production
+  
+Operating System:
+  Architecture: x86_64
+  Operating System: CentOS 7
+  Media: CentOS mirror
+  Partition Table: Kickstart default
+  
+Network:
+  Domain: example.com
+  Subnet: 192.168.1.0/24
+  IP Address: 192.168.1.100
+Click Submit to begin the provisioning process.
+
+The host will automatically reboot and begin the installation process.
+
+Task 3: Automate Discovery and Registration for New Systems
+Subtask 3.1: Create Host Groups for Automation
+Navigate to Configure → Host Groups in the Foreman interface.
+
+Create a new host group for automated registration:
+
+Name: auto-discovery
+Parent: (none)
+Environment: production
+Puppet CA Proxy: foreman.example.com
+Puppet Master Proxy: foreman.example.com
+Configure the Operating System tab:
+
+Architecture: x86_64
+Operating System: CentOS 7
+Media: CentOS mirror
+Partition Table: Kickstart default
+PXE Loader: PXELinux BIOS
+Save the host group configuration.
+
+Subtask 3.2: Configure Auto-Provisioning Rules
+Navigate to Hosts → Provisioning Templates.
+
+Create a custom discovery rule template:
+
+cat > /tmp/auto-discovery-rule.erb << 'EOF'
+<%#
+kind: discovery
+name: Auto Discovery Rule
+%>
+
+# Auto-discovery rule for new hosts
+if @host.facts['discovery_bootif']
+  # Set host group based on network interface
+  if @host.facts['discovery_bootif'].match(/^52:54:00/)
+    @host.hostgroup = Hostgroup.find_by_name('auto-discovery')
+  end
+  
+  # Set hostname based on MAC address
+  mac = @host.facts['discovery_bootif'].gsub(':', '')
+  @host.name = "auto-#{mac[-6..-1]}.example.com"
+  
+  # Auto-provision if conditions are met
+  if @host.facts['memorysize_mb'].to_i > 1024
+    @host.provision!
+  end
+end
+EOF
+Upload the template to Foreman:
+hammer template create \
+  --name "Auto Discovery Rule" \
+  --type discovery \
+  --file /tmp/auto-discovery-rule.erb
+Subtask 3.3: Configure Discovery Rules
+In the Foreman web interface, navigate to Configure → Discovery Rules.
+
+Create a new discovery rule:
+
+Rule Details:
+  Name: Auto Registration Rule
+  Search: facts.memorysize_mb > 1024
+  Host Group: auto-discovery
+  Hostname: discovery-<%= @host.facts['discovery_bootif'].gsub(':', '') %>
+  
+Actions:
+  Enabled: Yes
+  Priority: 100
+  Max Count: 10
+Configure advanced rule conditions:
+# Memory-based rule
+facts.memorysize_mb > 2048 AND facts.processorcount >= 2
+
+# Network-based rule  
+facts.discovery_bootif ~ "^52:54:00"
+
+# Combined rule
+facts.memorysize_mb > 1024 AND facts.discovery_bootif ~ "^52:54:00" AND facts.is_virtual = true
+Save the discovery rule.
+Subtask 3.4: Test Automated Discovery
+Create or start a new virtual machine that meets the rule criteria.
+
+Boot the new system from the discovery ISO.
+
+Monitor the discovery process in the Foreman logs:
+
+tail -f /var/log/foreman/production.log | grep -i discovery
+Verify that the system is automatically discovered and provisioned:
+# Check discovered hosts
+hammer discovery list
+
+# Check managed hosts
+hammer host list --search "name ~ discovery"
+Subtask 3.5: Create Bulk Registration Script
+Create a script for bulk host registration:
+cat > /tmp/bulk-register.sh << 'EOF'
+#!/bin/bash
+
+# Bulk registration script for discovered hosts
+FOREMAN_URL="https://foreman.example.com"
+USERNAME="admin"
+PASSWORD="admin123"
+
+# Get list of discovered hosts
+DISCOVERED_HOSTS=$(hammer --username $USERNAME --password $PASSWORD discovery list --output csv | tail -n +2)
+
+while IFS=',' read -r id name mac ip subnet; do
+    echo "Processing discovered host: $name ($mac)"
+    
+    # Auto-provision based on criteria
+    MEMORY=$(hammer --username $USERNAME --password $PASSWORD discovery info --id $id --output yaml | grep memorysize_mb | awk '{print $2}')
+    
+    if [ "$MEMORY" -gt 2048 ]; then
+        echo "Auto-provisioning host $name with sufficient memory ($MEMORY MB)"
+        
+        hammer --username $USERNAME --password $PASSWORD discovery provision \
+            --id $id \
+            --hostgroup "auto-discovery" \
+            --name "auto-$mac" \
+            --domain "example.com" \
+            --subnet "default"
+            
+        echo "Host $name provisioned successfully"
+    else
+        echo "Host $name does not meet memory requirements ($MEMORY MB)"
+    fi
+    
+done <<< "$DISCOVERED_HOSTS"
+EOF
+Make the script executable and run it:
+chmod +x /tmp/bulk-register.sh
+/tmp/bulk-register.sh
+Troubleshooting Common Issues
+Issue 1: Discovery ISO Not Booting
+Problem: System fails to boot from discovery ISO
+
+Solution:
+
+# Verify ISO integrity
+md5sum /tmp/foreman-discovery.iso
+
+# Check ISO contents
+mount -o loop /tmp/foreman-discovery.iso /mnt
+ls -la /mnt/
+
+# Recreate ISO with proper parameters
+genisoimage -o /tmp/foreman-discovery-fixed.iso \
+  -b isolinux/isolinux.bin \
+  -c isolinux/boot.cat \
+  -no-emul-boot \
+  -boot-load-size 4 \
+  -boot-info-table \
+  -V "FDIROOT" \
+  /var/lib/tftpboot/boot/fdi-image/
+Issue 2: Host Not Appearing in Discovery
+Problem: Booted host doesn't appear in discovered hosts list
+
+Solution:
+
+# Check Foreman proxy logs
+tail -f /var/log/foreman-proxy/proxy.log
+
+# Verify discovery plugin status
+foreman-rake plugin:list | grep discovery
+
+# Check network connectivity from discovered host
+# (from discovery environment console)
+ping foreman.example.com
+curl -k https://foreman.example.com
+Issue 3: Auto-Provisioning Fails
+Problem: Discovery rules don't trigger automatic provisioning
+
+Solution:
+
+# Check discovery rule syntax
+hammer discovery-rule list
+
+# Verify host group configuration
+hammer hostgroup info --name "auto-discovery"
+
+# Test rule matching manually
+hammer discovery provision --id <discovery_id> --hostgroup "auto-discovery"
+
+# Check provisioning logs
+tail -f /var/log/foreman/production.log | grep -i provision
+Verification and Testing
+Verify Discovery Process
+Check that the discovery service is running:
+systemctl status foreman-proxy
+systemctl status httpd
+Verify discovery hosts are being registered:
+hammer discovery list
+Test the discovery API:
+curl -k -u admin:admin123 \
+  https://foreman.example.com/api/v2/discovered_hosts
+Test Automated Registration
+Create a test script to validate the process:
+cat > /tmp/test-discovery.sh << 'EOF'
+#!/bin/bash
+
+echo "Testing Discovery Process..."
+
+# Check for discovered hosts
+DISCOVERED_COUNT=$(hammer discovery list --output csv | wc -l)
+echo "Discovered hosts: $((DISCOVERED_COUNT - 1))"
+
+# Check for managed hosts
+MANAGED_COUNT=$(hammer host list --output csv | wc -l)
+echo "Managed hosts: $((MANAGED_COUNT - 1))"
+
+# Check discovery rules
+RULES_COUNT=$(hammer discovery-rule list --output csv | wc -l)
+echo "Discovery rules: $((RULES_COUNT - 1))"
+
+echo "Discovery test completed."
+EOF
+Run the test script:
+chmod +x /tmp/test-discovery.sh
+/tmp/test-discovery.sh
+Conclusion
+In this lab, you have successfully:
+
+• Created a boot ISO for Red Hat Satellite/Foreman that enables automated host discovery • Implemented automated host registration using discovery images and boot ISOs • Configured discovery rules that automatically provision hosts based on hardware criteria • Set up bulk registration processes for managing multiple systems efficiently • Troubleshot common issues related to discovery and automated registration
+
+Why This Matters: Automating host registration with boot ISOs significantly reduces the manual effort required for large-scale deployments. This approach is essential for:
+
+Data Centers: Rapidly provisioning new servers without manual intervention
+Cloud Environments: Automatically registering instances as they scale up or down
+Disaster Recovery: Quickly rebuilding infrastructure from standardized images
+Compliance: Ensuring all systems are properly registered and managed from deployment
+The skills you've learned enable you to implement enterprise-grade automation for system lifecycle management, which is crucial for the Red Hat Certified Specialist in Deployment and Systems Management certification and real-world infrastructure management scenarios.
+
+By mastering these automated registration techniques, you can significantly improve operational efficiency and reduce the potential for human error in large-scale system deployments.
