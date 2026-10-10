@@ -1,0 +1,268 @@
+Lab 11: Managing Puppet Environments
+Objectives
+By the end of this lab, students will be able to:
+
+Create and configure Puppet environments in Red Hat Satellite
+Manage Puppet classes and modules effectively
+Assign Puppet classes to hosts through Satellite interface
+Deploy configuration changes to managed hosts using Puppet
+Monitor and verify Puppet configuration deployment
+Troubleshoot common Puppet environment issues
+Prerequisites
+Before starting this lab, students should have:
+
+Basic understanding of Linux system administration
+Familiarity with Red Hat Satellite concepts
+Knowledge of YAML syntax and configuration files
+Understanding of configuration management principles
+Experience with command-line interface operations
+Completed previous Satellite labs or equivalent knowledge
+Lab Environment
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines for this lab. Simply click Start Lab to access your environment - no need to build your own virtual machines.
+
+Your lab environment includes:
+
+Red Hat Satellite Server (satellite.example.com)
+Managed client hosts (client1.example.com, client2.example.com)
+Pre-installed Puppet modules and dependencies
+Network connectivity between all systems
+Task 1: Create and Manage Puppet Environments
+Subtask 1.1: Access Satellite Web Interface
+Open your web browser and navigate to the Satellite server
+Log in using the provided credentials
+# Access Satellite web interface
+URL: https://satellite.example.com
+Username: admin
+Password: [provided in lab environment]
+Navigate to Configure → Environments in the main menu
+Verify the default production environment exists
+Subtask 1.2: Create Development Environment
+Click New Environment button
+Fill in the environment details:
+Name: development
+Description: Development environment for testing configurations
+Click Submit to create the environment
+Verify the development environment appears in the environments list
+Subtask 1.3: Create Staging Environment
+Create another environment for staging:
+Name: staging
+Description: Staging environment for pre-production testing
+Click Submit to save the staging environment
+Confirm all three environments (production, development, staging) are visible
+Subtask 1.4: Configure Environment Hierarchy
+Navigate to Configure → Environment Groups
+Click New Environment Group
+Create an environment group:
+Name: application-lifecycle
+Description: Application lifecycle environments
+Environments: development → staging → production
+Save the environment group configuration
+Task 2: Assign Puppet Classes to Hosts in Satellite
+Subtask 2.1: Import Puppet Classes
+Navigate to Configure → Classes
+Click Import from [puppet-server] button
+Select the environment to import from (start with production)
+Review available Puppet classes and select:
+# Common classes to import
+- apache
+- ntp
+- users
+- firewall
+- motd
+Click Update to import the selected classes
+Subtask 2.2: Configure Apache Class Parameters
+Click on the apache class from the classes list
+Navigate to Smart Class Parameters tab
+Configure the following parameters:
+Parameter: package_ensure
+Override: true
+Default Value: present
+Description: Ensure Apache package is installed
+
+Parameter: service_enable
+Override: true  
+Default Value: true
+Description: Enable Apache service on boot
+
+Parameter: service_ensure
+Override: true
+Default Value: running
+Description: Ensure Apache service is running
+Save the parameter configurations
+Subtask 2.3: Assign Classes to Host Groups
+Navigate to Configure → Host Groups
+Click New Host Group or select existing group
+Create/configure a host group:
+Name: web-servers
+Environment: production
+Puppet Classes: apache, firewall, motd
+Description: Web server configuration group
+In the Puppet Classes tab, add the selected classes
+Save the host group configuration
+Subtask 2.4: Assign Individual Hosts to Classes
+Navigate to Hosts → All Hosts
+Select client1.example.com
+Click Edit button
+In the Puppet Classes tab, assign classes:
+# Assign these classes to client1
+- apache
+- ntp  
+- users
+- motd
+Set the environment to production
+Save the host configuration
+Repeat for client2.example.com with different classes if desired
+Task 3: Deploy Configuration Changes via Puppet Through Satellite
+Subtask 3.1: Create Custom Puppet Module
+SSH to the Satellite server:
+ssh root@satellite.example.com
+Navigate to the Puppet modules directory:
+cd /etc/puppetlabs/code/environments/production/modules
+Create a custom module structure:
+# Create custom motd module
+mkdir -p custom_motd/{manifests,templates,files}
+
+# Create the main manifest
+cat > custom_motd/manifests/init.pp << 'EOF'
+class custom_motd {
+  file { '/etc/motd':
+    ensure  => file,
+    content => template('custom_motd/motd.erb'),
+    owner   => 'root',
+    group   => 'root',
+    mode    => '0644',
+  }
+}
+EOF
+Create the template file:
+cat > custom_motd/templates/motd.erb << 'EOF'
+=====================================
+Welcome to <%= @fqdn %>
+=====================================
+Environment: <%= @environment %>
+Managed by: Red Hat Satellite
+Last Puppet Run: <%= @timestamp %>
+=====================================
+Unauthorized access is prohibited
+=====================================
+EOF
+Subtask 3.2: Import New Module to Satellite
+Return to Satellite web interface
+Navigate to Configure → Classes
+Click Import from [puppet-server]
+Select production environment
+Find and import the custom_motd class
+Configure any necessary parameters
+Subtask 3.3: Assign Custom Module to Hosts
+Navigate to Hosts → All Hosts
+Select client1.example.com
+Edit the host and add custom_motd to Puppet classes
+Save the configuration
+Subtask 3.4: Trigger Puppet Run
+From Satellite interface, select the host
+Click Run Puppet button to trigger immediate deployment
+Alternatively, use command line on the client:
+# SSH to client1
+ssh root@client1.example.com
+
+# Run Puppet agent manually
+puppet agent -t
+
+# Verify the configuration was applied
+cat /etc/motd
+Subtask 3.5: Monitor Deployment Status
+In Satellite, navigate to Monitor → Reports
+View the latest Puppet run reports
+Check for any errors or warnings:
+# On Satellite server, check Puppet logs
+tail -f /var/log/foreman/production.log
+
+# Check Puppet server logs
+tail -f /var/log/puppetlabs/puppetserver/puppetserver.log
+Verify successful deployment by checking host status
+Subtask 3.6: Deploy Configuration to Multiple Environments
+Copy the custom module to other environments:
+# On Satellite server
+cp -r /etc/puppetlabs/code/environments/production/modules/custom_motd \
+      /etc/puppetlabs/code/environments/development/modules/
+
+cp -r /etc/puppetlabs/code/environments/production/modules/custom_motd \
+      /etc/puppetlabs/code/environments/staging/modules/
+Import classes for each environment through Satellite interface
+Test deployment in development environment first
+Promote successful configurations to staging, then production
+Subtask 3.7: Verify Configuration Compliance
+Navigate to Monitor → Configuration Status
+Review compliance reports for all managed hosts
+Check for configuration drift:
+# On client hosts, verify Puppet is managing resources
+puppet resource service httpd
+puppet resource package httpd
+puppet resource file /etc/motd
+Address any compliance issues found
+Troubleshooting Common Issues
+Issue 1: Puppet Classes Not Importing
+Symptoms: Classes don't appear in import list
+
+Solution:
+
+# Check Puppet server status
+systemctl status puppetserver
+
+# Verify module syntax
+puppet parser validate /etc/puppetlabs/code/environments/production/modules/*/manifests/*.pp
+
+# Check Puppet server logs
+journalctl -u puppetserver -f
+Issue 2: Configuration Not Applying
+Symptoms: Puppet runs complete but changes not applied
+
+Solution:
+
+# Run Puppet in debug mode
+puppet agent -t --debug
+
+# Check for certificate issues
+puppet cert list --all
+
+# Verify host can communicate with Puppet server
+telnet satellite.example.com 8140
+Issue 3: Environment Conflicts
+Symptoms: Wrong environment configurations applied
+
+Solution:
+
+# Check host environment assignment
+puppet config print environment
+
+# Verify environment exists on server
+ls -la /etc/puppetlabs/code/environments/
+
+# Update host environment in Satellite interface
+Verification Steps
+Verify Environment Creation:
+# Check environments exist
+curl -k -u admin:password https://satellite.example.com/api/environments
+Verify Class Assignment:
+# Check host classes
+puppet config print classes
+Verify Configuration Deployment:
+# Check last Puppet run
+puppet agent --configprint lastrunfile
+cat $(puppet agent --configprint lastrunfile)
+Conclusion
+In this lab, you have successfully:
+
+Created multiple Puppet environments (development, staging, production) to support configuration lifecycle management
+Imported and configured Puppet classes with customizable parameters for flexible host management
+Assigned Puppet classes to hosts and host groups through the Satellite interface for organized configuration management
+Deployed custom configurations using Puppet modules and verified successful application across managed hosts
+Monitored deployment status and learned to troubleshoot common Puppet environment issues
+Why This Matters: Managing Puppet environments through Red Hat Satellite provides enterprise-level configuration management capabilities. This approach enables:
+
+Consistent Configuration: Ensures all systems maintain desired state configurations
+Scalable Management: Efficiently manages hundreds or thousands of systems from a central location
+Change Control: Implements proper testing workflows through environment promotion
+Compliance Monitoring: Tracks configuration drift and maintains security compliance
+Automation: Reduces manual configuration tasks and human error
+These skills are essential for Red Hat Certified Specialists in Deployment and Systems Management, as they demonstrate proficiency in enterprise configuration management using industry-standard tools. The ability to manage Puppet environments through Satellite is crucial for maintaining large-scale Linux infrastructures in production environments.
