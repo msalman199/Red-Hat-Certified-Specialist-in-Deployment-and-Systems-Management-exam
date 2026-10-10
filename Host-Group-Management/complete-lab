@@ -1,0 +1,476 @@
+Lab 6: Host Group Management
+Objectives
+By the end of this lab, students will be able to:
+
+Create and configure host groups for system provisioning
+Associate host groups with provisioning templates for automated deployments
+Implement templated deployments using host group configurations
+Test and validate host group-based deployment workflows
+Understand the benefits of using host groups for scalable infrastructure management
+Prerequisites
+Before starting this lab, students should have:
+
+Basic understanding of Linux system administration
+Familiarity with configuration management concepts
+Knowledge of YAML syntax and file structures
+Experience with command-line interface operations
+Understanding of network configuration basics
+Completion of previous labs in the deployment and systems management series
+Lab Environment
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines for this lab. Simply click Start Lab to access your environment - no need to build your own virtual machines or configure complex setups.
+
+Your lab environment includes:
+
+Management Server: CentOS/RHEL 8 with Foreman/Katello installed
+Target Hosts: Multiple blank systems ready for provisioning
+Network Configuration: Pre-configured subnets and DHCP services
+Storage: Shared storage for templates and configurations
+Task 1: Create Host Groups for System Provisioning
+Subtask 1.1: Access the Foreman Web Interface
+Open your web browser and navigate to the Foreman management interface:
+# Access the Foreman web interface
+https://foreman.example.com
+Log in with the provided administrator credentials:
+
+Username: admin
+Password: [provided in lab environment]
+Verify you can access the main dashboard and navigate to the Configure menu.
+
+Subtask 1.2: Create Base Host Group Structure
+Navigate to Configure → Host Groups in the Foreman interface.
+
+Click Create Host Group to create your first host group.
+
+Create a Web Servers host group with the following configuration:
+
+Name: web-servers
+Description: Host group for web server deployments
+Parent: [Leave blank for now]
+Environment: production
+Puppet Classes: [We'll configure this later]
+Fill in the Operating System tab:
+
+Operating System: CentOS 8
+Architecture: x86_64
+Medium: CentOS 8 mirror
+Partition Table: Kickstart default
+Configure the Network tab:
+
+Domain: example.com
+Subnet: Default subnet (192.168.1.0/24)
+DHCP Proxy: Smart Proxy
+Click Submit to create the host group.
+
+Subtask 1.3: Create Additional Host Groups
+Create a Database Servers host group:
+Name: db-servers
+Description: Host group for database server deployments
+Parent: [Leave blank]
+Environment: production
+Configure the database host group with:
+
+Operating System: CentOS 8
+Architecture: x86_64
+Root Password: [Set a secure password]
+Create a Development Environment host group:
+
+Name: dev-environment
+Description: Host group for development systems
+Parent: [Leave blank]
+Environment: development
+Subtask 1.4: Create Nested Host Groups
+Create a child host group under web-servers:
+Name: apache-servers
+Description: Apache web servers
+Parent: web-servers
+Environment: production
+Create another child host group:
+Name: nginx-servers
+Description: Nginx web servers
+Parent: web-servers
+Environment: production
+Verify the hierarchical structure is displayed correctly in the host groups list.
+Task 2: Associate Host Groups with Provisioning Templates
+Subtask 2.1: Create Custom Provisioning Templates
+Navigate to Hosts → Provisioning Templates.
+
+Click Create Template to create a new provisioning template.
+
+Create a Web Server Kickstart Template:
+
+# Web Server Kickstart Template
+<%#
+kind: provision
+name: Web Server Kickstart
+oses:
+- CentOS 8
+%>
+
+# System authorization information
+auth --enableshadow --passalgo=sha512
+
+# Use network installation
+url --url="<%= @medium %>"
+
+# Keyboard layouts
+keyboard --vckeymap=us --xlayouts='us'
+
+# System language
+lang en_US.UTF-8
+
+# Network information
+network --bootproto=dhcp --device=eth0 --onboot=on --activate
+
+# Root password
+rootpw --iscrypted <%= root_pass %>
+
+# System timezone
+timezone America/New_York --isUtc
+
+# System bootloader configuration
+bootloader --location=mbr --boot-drive=sda
+
+# Partition clearing information
+clearpart --all --initlabel
+
+# Disk partitioning information
+part /boot --fstype="xfs" --ondisk=sda --size=1024
+part pv.01 --fstype="lvmpv" --ondisk=sda --grow
+volgroup vg_root --pesize=4096 pv.01
+logvol / --fstype="xfs" --size=8192 --name=lv_root --vgname=vg_root
+logvol /var --fstype="xfs" --size=4096 --name=lv_var --vgname=vg_root
+logvol swap --fstype="swap" --size=2048 --name=lv_swap --vgname=vg_root
+
+%packages
+@^minimal-environment
+@standard
+httpd
+mod_ssl
+wget
+curl
+vim
+%end
+
+%post --log=/root/ks-post.log
+# Configure Apache
+systemctl enable httpd
+systemctl enable firewalld
+
+# Configure firewall
+firewall-cmd --permanent --add-service=http
+firewall-cmd --permanent --add-service=https
+
+# Create default web page
+cat > /var/www/html/index.html << EOF
+<html>
+<head><title>Web Server - <%= @host.name %></title></head>
+<body>
+<h1>Welcome to <%= @host.name %></h1>
+<p>This server was provisioned using Foreman host groups.</p>
+<p>Server Type: Web Server</p>
+<p>Deployment Date: $(date)</p>
+</body>
+</html>
+EOF
+
+%end
+
+reboot
+Save the template and associate it with the CentOS 8 operating system.
+Subtask 2.2: Create Database Server Template
+Create a Database Server Kickstart Template:
+# Database Server Kickstart Template
+<%#
+kind: provision
+name: Database Server Kickstart
+oses:
+- CentOS 8
+%>
+
+# System authorization information
+auth --enableshadow --passalgo=sha512
+
+# Use network installation
+url --url="<%= @medium %>"
+
+# Keyboard layouts
+keyboard --vckeymap=us --xlayouts='us'
+
+# System language
+lang en_US.UTF-8
+
+# Network information
+network --bootproto=dhcp --device=eth0 --onboot=on --activate
+
+# Root password
+rootpw --iscrypted <%= root_pass %>
+
+# System timezone
+timezone America/New_York --isUtc
+
+# System bootloader configuration
+bootloader --location=mbr --boot-drive=sda
+
+# Partition clearing information
+clearpart --all --initlabel
+
+# Disk partitioning information
+part /boot --fstype="xfs" --ondisk=sda --size=1024
+part pv.01 --fstype="lvmpv" --ondisk=sda --grow
+volgroup vg_root --pesize=4096 pv.01
+logvol / --fstype="xfs" --size=8192 --name=lv_root --vgname=vg_root
+logvol /var --fstype="xfs" --size=8192 --name=lv_var --vgname=vg_root
+logvol /var/lib/mysql --fstype="xfs" --size=10240 --name=lv_mysql --vgname=vg_root
+logvol swap --fstype="swap" --size=4096 --name=lv_swap --vgname=vg_root
+
+%packages
+@^minimal-environment
+@standard
+mariadb-server
+mariadb
+wget
+curl
+vim
+%end
+
+%post --log=/root/ks-post.log
+# Configure MariaDB
+systemctl enable mariadb
+systemctl enable firewalld
+
+# Configure firewall
+firewall-cmd --permanent --add-service=mysql
+
+# Set up basic MySQL security
+mysql_secure_installation --use-default
+
+%end
+
+reboot
+Subtask 2.3: Associate Templates with Host Groups
+Navigate back to Configure → Host Groups.
+
+Edit the web-servers host group:
+
+Go to the Operating System tab
+Set Provisioning Template: Web Server Kickstart
+Set PXELinux Template: PXELinux default
+Click Submit
+Edit the db-servers host group:
+
+Go to the Operating System tab
+Set Provisioning Template: Database Server Kickstart
+Set PXELinux Template: PXELinux default
+Click Submit
+Verify that child host groups inherit the templates from their parents.
+
+Subtask 2.4: Configure Host Group Parameters
+Edit the web-servers host group and go to the Parameters tab.
+
+Add the following parameters:
+
+Parameter Name: web_server_type
+Value: apache
+Override: Yes
+
+Parameter Name: max_connections
+Value: 150
+Override: Yes
+
+Parameter Name: document_root
+Value: /var/www/html
+Override: No
+For the db-servers host group, add these parameters:
+Parameter Name: db_engine
+Value: mariadb
+Override: Yes
+
+Parameter Name: max_connections
+Value: 100
+Override: Yes
+
+Parameter Name: innodb_buffer_pool_size
+Value: 128M
+Override: Yes
+Save the configurations for both host groups.
+Task 3: Test Host Group-Based Deployments
+Subtask 3.1: Prepare Test Hosts
+Navigate to Hosts → All Hosts.
+
+Click Create Host to add a new host for testing.
+
+Create a test web server:
+
+Name: webserver01.example.com
+Host Group: apache-servers
+Deploy on: Bare Metal
+MAC Address: [Use the MAC from your test VM]
+IP Address: 192.168.1.100
+Create a test database server:
+Name: dbserver01.example.com
+Host Group: db-servers
+Deploy on: Bare Metal
+MAC Address: [Use the MAC from your second test VM]
+IP Address: 192.168.1.101
+Subtask 3.2: Initiate Host Group Deployments
+From the All Hosts page, select webserver01.example.com.
+
+Click Build to mark the host for provisioning.
+
+Verify the build configuration shows:
+
+Operating System: CentOS 8
+Provisioning Template: Web Server Kickstart
+Host Group: apache-servers
+Parameters: Inherited from web-servers group
+Repeat the process for dbserver01.example.com.
+
+Boot both test systems via PXE to begin the automated installation.
+
+Subtask 3.3: Monitor Deployment Progress
+Use the Foreman interface to monitor the deployment progress:
+# Check deployment status via CLI
+hammer host list --search "build = true"
+Monitor the installation logs:
+# View installation progress
+tail -f /var/log/foreman-proxy/proxy.log
+Track the hosts as they progress through:
+PXE Boot
+Kickstart Download
+OS Installation
+Post-Installation Scripts
+First Boot
+Subtask 3.4: Verify Successful Deployments
+Once the installations complete, verify the web server deployment:
+# SSH to the web server
+ssh root@webserver01.example.com
+
+# Check Apache status
+systemctl status httpd
+
+# Verify the custom web page
+curl http://webserver01.example.com
+Verify the database server deployment:
+# SSH to the database server
+ssh root@dbserver01.example.com
+
+# Check MariaDB status
+systemctl status mariadb
+
+# Test database connectivity
+mysql -u root -p -e "SHOW DATABASES;"
+Confirm that host group parameters were applied:
+# On web server - check for web server specific configurations
+grep -r "apache" /etc/
+ps aux | grep httpd
+
+# On database server - check for database specific configurations
+grep -r "mariadb" /etc/
+ps aux | grep mysql
+Subtask 3.5: Test Template Inheritance
+Create a new host using the nginx-servers child host group:
+Name: webserver02.example.com
+Host Group: nginx-servers
+Deploy on: Bare Metal
+MAC Address: [Use another test VM MAC]
+IP Address: 192.168.1.102
+Before building, modify the nginx-servers host group to override the provisioning template:
+
+Create a new Nginx Server Kickstart template
+Associate it with the nginx-servers host group
+Verify inheritance works correctly
+Deploy the nginx server and verify it uses the correct template and inherits parent group parameters.
+
+Subtask 3.6: Bulk Deployment Testing
+Create multiple hosts using the same host group:
+# Use Hammer CLI for bulk host creation
+hammer host create --name "webserver03.example.com" --hostgroup "apache-servers" --mac "52:54:00:12:34:56" --ip "192.168.1.103"
+hammer host create --name "webserver04.example.com" --hostgroup "apache-servers" --mac "52:54:00:12:34:57" --ip "192.168.1.104"
+hammer host create --name "webserver05.example.com" --hostgroup "apache-servers" --mac "52:54:00:12:34:58" --ip "192.168.1.105"
+Build all hosts simultaneously:
+# Mark multiple hosts for building
+hammer host update --name "webserver03.example.com" --build true
+hammer host update --name "webserver04.example.com" --build true
+hammer host update --name "webserver05.example.com" --build true
+Monitor the parallel deployments and verify they all complete successfully with identical configurations.
+Troubleshooting Common Issues
+Issue 1: Template Association Problems
+Problem: Host group doesn't use the correct provisioning template.
+
+Solution:
+
+# Check template associations
+hammer template list --search "name ~ kickstart"
+
+# Verify host group template settings
+hammer hostgroup info --name "web-servers"
+
+# Re-associate template if needed
+hammer hostgroup update --name "web-servers" --provisioning-template "Web Server Kickstart"
+Issue 2: Parameter Inheritance Issues
+Problem: Child host groups don't inherit parent parameters.
+
+Solution:
+
+# Check parameter inheritance
+hammer hostgroup info --name "apache-servers" --show-parameters
+
+# Verify parent-child relationships
+hammer hostgroup list --show-parameters
+Issue 3: PXE Boot Failures
+Problem: Hosts fail to PXE boot properly.
+
+Solution:
+
+# Check DHCP configuration
+systemctl status dhcpd
+
+# Verify TFTP services
+systemctl status tftp
+
+# Check PXE template generation
+ls -la /var/lib/tftpboot/pxelinux.cfg/
+Advanced Configuration
+Creating Smart Class Parameters
+Navigate to Configure → Smart Class Parameters.
+
+Create a smart class parameter for web server configuration:
+
+Parameter: apache_max_workers
+Type: integer
+Default Value: 150
+Override: Yes
+Matcher: hostgroup
+Set different values for different host groups:
+apache-servers: 200
+nginx-servers: 300
+Using External Node Classifier (ENC)
+Configure Foreman as an ENC for Puppet:
+# Edit puppet.conf
+vim /etc/puppetlabs/puppet/puppet.conf
+
+# Add ENC configuration
+[master]
+node_terminus = exec
+external_nodes = /etc/puppetlabs/puppet/node.rb
+Test ENC functionality:
+# Test ENC output
+/etc/puppetlabs/puppet/node.rb webserver01.example.com
+Conclusion
+In this lab, you have successfully:
+
+Created hierarchical host groups for organizing different types of systems (web servers, database servers, development environments)
+Associated provisioning templates with host groups to enable automated, consistent deployments
+Implemented template inheritance through parent-child host group relationships
+Tested bulk deployments using host group configurations
+Verified parameter inheritance and template application across multiple systems
+Why This Matters: Host group management is crucial for scalable infrastructure deployment because it:
+
+Standardizes deployments across similar systems
+Reduces configuration errors through templated approaches
+Enables rapid scaling of infrastructure components
+Simplifies maintenance through centralized configuration management
+Supports compliance by ensuring consistent system configurations
+The skills you've developed in this lab are essential for the Red Hat Certified Specialist in Deployment and Systems Management exam and are directly applicable to enterprise infrastructure management scenarios. You can now efficiently manage large-scale deployments using host groups, ensuring consistency and reducing the time required for system provisioning.
+
+Next Steps: Consider exploring advanced topics such as Puppet integration with host groups, custom fact usage in templates, and automated testing of host group deployments to further enhance your deployment automation capabilities.
