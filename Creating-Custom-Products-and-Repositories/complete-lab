@@ -1,0 +1,317 @@
+Lab 3: Creating Custom Products and Repositories
+Objectives
+By the end of this lab, you will be able to:
+
+Create and configure custom products in Red Hat Satellite
+Create and manage custom repositories for software packages
+Link custom repositories to products for organized content management
+Understand the relationship between products, repositories, and content views
+Configure repository synchronization settings
+Manage custom content lifecycle in Satellite
+Prerequisites
+Before starting this lab, you should have:
+
+Basic understanding of Linux command line operations
+Familiarity with Red Hat Satellite concepts (organizations, locations)
+Knowledge of RPM package management
+Understanding of repository concepts in Linux
+Access to Red Hat Satellite 6.x environment
+Administrative privileges in Satellite
+Lab Environment Setup
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines with Red Hat Satellite already installed. Simply click Start Lab to access your environment - no need to build your own VM or install Satellite from scratch.
+
+Your lab environment includes:
+
+Red Hat Satellite 6.x server
+Pre-configured organization and location
+Administrative user access
+Network connectivity for repository synchronization
+Task 1: Create Custom Products in Satellite
+Subtask 1.1: Access Satellite Web Interface
+Open your web browser and navigate to the Satellite server URL provided in your lab environment
+
+Log in using the administrative credentials:
+
+Username: admin
+Password: (provided in lab environment)
+Verify you are in the correct organization by checking the organization selector in the top-left corner
+
+Subtask 1.2: Navigate to Products Section
+From the main Satellite dashboard, click on Content in the left navigation menu
+Select Products from the dropdown menu
+You will see the Products overview page showing existing products
+Subtask 1.3: Create Your First Custom Product
+Click the Create Product button in the top-right corner
+
+Fill in the product details:
+
+Name: Custom Applications
+Label: custom-applications (auto-generated)
+GPG Key: Leave blank for now
+Sync Plan: Leave blank (we'll configure this later)
+Description: Custom product for internal applications and tools
+Click Save to create the product
+
+Subtask 1.4: Create Additional Custom Products
+Create two more custom products following the same process:
+
+Product 2:
+
+Name: Development Tools
+Label: development-tools
+Description: Custom product for development and testing tools
+Product 3:
+
+Name: Security Updates
+Label: security-updates
+Description: Custom product for security patches and updates
+Subtask 1.5: Verify Product Creation
+Return to the Products list page
+Confirm all three custom products are listed:
+Custom Applications
+Development Tools
+Security Updates
+Note the product status shows as No Repositories
+Task 2: Create and Manage Custom Repositories
+Subtask 2.1: Create Repository for Custom Applications Product
+Click on the Custom Applications product from the products list
+
+In the product details page, click Create Repository
+
+Configure the repository settings:
+
+Name: Internal Web Applications
+Label: internal-web-applications
+Type: yum
+Architecture: x86_64
+URL: https://download.example.com/internal/web-apps/ (example URL)
+Download Policy: Immediate
+Mirror on Sync: Yes
+Verify SSL: Yes
+Click Save to create the repository
+
+Subtask 2.2: Create File-Based Repository
+Still in the Custom Applications product, click Create Repository again
+
+Configure a file-based repository:
+
+Name: Configuration Files
+Label: configuration-files
+Type: file
+URL: Leave blank (for manual file uploads)
+Description: Repository for configuration files and scripts
+Click Save to create the file repository
+
+Subtask 2.3: Create Repository for Development Tools
+Navigate back to Content > Products
+
+Click on Development Tools product
+
+Click Create Repository and configure:
+
+Name: Python Packages
+Label: python-packages
+Type: yum
+Architecture: noarch
+URL: https://download.example.com/python/packages/
+Download Policy: On Demand
+GPG Key: Leave blank
+Create another repository in the same product:
+
+Name: Docker Images
+Label: docker-images
+Type: docker
+URL: https://registry.example.com/
+Upstream Name: custom/apps
+Subtask 2.4: Create Repository for Security Updates
+Navigate to Security Updates product
+Create a repository with these settings:
+Name: Critical Security Patches
+Label: critical-security-patches
+Type: yum
+Architecture: x86_64
+URL: https://security.example.com/patches/rhel8/
+Download Policy: Immediate
+Mirror on Sync: Yes
+Subtask 2.5: Configure Repository Settings
+Click on the Internal Web Applications repository
+Navigate to the Details tab and review settings
+Click on the Packages tab (currently empty)
+Go to the Sync Status tab to check synchronization status
+Task 3: Link Custom Repositories to Products
+Subtask 3.1: Verify Repository-Product Relationships
+Navigate to Content > Products
+Click on Custom Applications product
+Verify that both repositories are listed:
+Internal Web Applications
+Configuration Files
+Note the repository count shows 2 Repositories
+Subtask 3.2: Configure Repository Synchronization
+In the Custom Applications product page, select the Internal Web Applications repository
+Click the Sync Now button to test synchronization
+Monitor the sync progress in the Sync Status tab
+Note: Since we're using example URLs, the sync may fail - this is expected in the lab environment
+Subtask 3.3: Upload Content to File Repository
+Navigate to the Configuration Files repository
+Click on the Upload Package button
+Create a sample configuration file on your local system:
+# Create a sample configuration file
+echo "# Sample Application Configuration
+app_name=MyCustomApp
+version=1.0
+debug=false
+log_level=info" > sample-config.conf
+Upload the sample-config.conf file to the repository
+Verify the file appears in the repository content
+Subtask 3.4: Manage Repository Content
+For each repository, review the following tabs:
+Details: Basic repository information
+Packages: Available packages (may be empty for new repositories)
+Sync Status: Synchronization history and status
+GPG Keys: Associated GPG keys for package verification
+Subtask 3.5: Configure Sync Plans
+Navigate to Content > Sync Plans
+
+Click Create Sync Plan
+
+Configure a sync plan:
+
+Name: Daily Security Sync
+Description: Daily synchronization for security updates
+Interval: Daily
+Start Date: Today's date
+Start Time: 02:00 AM
+Click Save
+
+Navigate back to Products > Security Updates
+
+Edit the product and assign the Daily Security Sync plan
+
+Subtask 3.6: Create Content Views
+Navigate to Content > Content Views
+
+Click Create New View
+
+Configure the content view:
+
+Name: Custom Applications View
+Label: custom-applications-view
+Description: Content view for custom applications
+Click Save
+
+In the content view, go to Yum Content > Repositories
+
+Click Add and select repositories from your custom products
+
+Add the Internal Web Applications repository
+
+Click Add Repository
+
+Subtask 3.7: Publish Content View
+In the Custom Applications View, click Publish New Version
+Add a description: Initial version with custom applications
+Click Save
+Monitor the publishing process
+Once complete, note the version number (1.0)
+Verification and Testing
+Verify Product Creation
+Navigate to Content > Products
+Confirm all three custom products exist:
+Custom Applications (2 repositories)
+Development Tools (2 repositories)
+Security Updates (1 repository)
+Verify Repository Configuration
+Check each repository has appropriate settings:
+Correct product association
+Proper repository type
+Valid URLs (where applicable)
+Appropriate download policies
+Test Repository Functionality
+Attempt to sync at least one repository
+Upload content to the file-based repository
+Verify content appears in repository listings
+Troubleshooting Common Issues
+Repository Sync Failures
+If repository synchronization fails:
+
+Check the repository URL is accessible
+Verify SSL certificates if using HTTPS
+Confirm authentication credentials if required
+Review sync logs in Monitor > Tasks
+Product Creation Issues
+If you cannot create products:
+
+Verify you have the correct permissions
+Check organization context is correct
+Ensure product names are unique
+Confirm you're not exceeding subscription limits
+Repository Association Problems
+If repositories don't appear under products:
+
+Refresh the browser page
+Verify the repository was created successfully
+Check the product-repository relationship in the database if needed
+Advanced Configuration
+GPG Key Management
+Navigate to Content > GPG Keys
+Click Create GPG Key
+Upload or paste GPG key content
+Associate keys with products for package verification
+Custom Repository Commands
+For advanced repository management, you can use hammer CLI:
+
+# List all products
+hammer product list --organization "Default Organization"
+
+# Create product via CLI
+hammer product create --name "CLI Product" --organization "Default Organization"
+
+# Create repository via CLI
+hammer repository create \
+  --name "CLI Repository" \
+  --product "CLI Product" \
+  --content-type "yum" \
+  --url "https://example.com/repo" \
+  --organization "Default Organization"
+
+# Sync repository
+hammer repository synchronize \
+  --name "CLI Repository" \
+  --product "CLI Product" \
+  --organization "Default Organization"
+Best Practices
+Product Organization
+Group related repositories under logical products
+Use descriptive names and labels
+Maintain consistent naming conventions
+Document product purposes and contents
+Repository Management
+Choose appropriate download policies based on usage
+Configure sync plans for automated updates
+Monitor repository sizes and growth
+Implement proper GPG key verification
+Content Lifecycle
+Use content views to manage repository combinations
+Implement promotion workflows for testing
+Maintain version control for content changes
+Plan for content archival and cleanup
+Conclusion
+In this lab, you have successfully:
+
+Created three custom products in Red Hat Satellite with descriptive names and purposes
+Configured five different repositories including yum, file, and docker types with various settings
+Established proper relationships between products and repositories for organized content management
+Implemented synchronization strategies including sync plans and manual synchronization
+Created and published content views to manage repository combinations
+Learned troubleshooting techniques for common repository and product issues
+Why This Matters
+Custom products and repositories are fundamental to Satellite's content management capabilities. They allow organizations to:
+
+Centralize custom software distribution across the infrastructure
+Maintain version control for internal applications and configurations
+Implement security policies through controlled content delivery
+Reduce bandwidth usage through local repository caching
+Ensure consistency across development, testing, and production environments
+These skills are essential for the Red Hat Certified Specialist in Deployment and Systems Management exam and real-world Satellite administration. Understanding how to create, manage, and organize custom content enables you to build robust software delivery pipelines that meet enterprise requirements for security, compliance, and operational efficiency.
+
+The knowledge gained in this lab provides the foundation for advanced Satellite topics including content views, composite content views, and automated content promotion workflows that are critical for large-scale infrastructure management.
