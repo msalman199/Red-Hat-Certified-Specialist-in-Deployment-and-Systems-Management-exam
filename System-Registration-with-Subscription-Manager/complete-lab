@@ -1,0 +1,270 @@
+Lab 7: System Registration with Subscription Manager
+Objectives
+By the end of this lab, you will be able to:
+
+Understand the purpose and benefits of Red Hat Satellite for system management
+Register RHEL hosts to Satellite using subscription-manager command-line tool
+Create and apply activation keys for automated system registration
+Validate successful registration through the Satellite web dashboard
+Troubleshoot common registration issues and verify system connectivity
+Prerequisites
+Before starting this lab, you should have:
+
+Basic understanding of Linux command-line operations
+Familiarity with Red Hat Enterprise Linux (RHEL) system administration
+Knowledge of package management concepts
+Understanding of network connectivity and DNS resolution
+Access to root or sudo privileges on target systems
+Lab Environment
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines for this lab. Simply click Start Lab to access your environment - no need to build your own virtual machines or configure complex networking.
+
+Your lab environment includes:
+
+Red Hat Satellite server (pre-installed and configured)
+Multiple RHEL client systems ready for registration
+Network connectivity between all systems
+All necessary repositories and packages pre-staged
+Task 1: Prepare for System Registration
+Subtask 1.1: Verify Network Connectivity
+First, ensure your client systems can communicate with the Satellite server.
+
+Check DNS resolution for the Satellite server:
+nslookup satellite.example.com
+Test network connectivity to the Satellite server:
+ping -c 4 satellite.example.com
+Verify Satellite services are accessible:
+curl -k https://satellite.example.com/pub/
+Subtask 1.2: Install Required Packages
+Ensure the subscription-manager package is installed and up-to-date.
+
+Check if subscription-manager is installed:
+rpm -qa | grep subscription-manager
+Install or update subscription-manager if needed:
+sudo yum install -y subscription-manager
+Verify the installation:
+subscription-manager --version
+Subtask 1.3: Download Satellite CA Certificate
+The client system needs the Satellite server's CA certificate for secure communication.
+
+Download the CA certificate from Satellite:
+sudo wget -O /etc/rhsm/ca/katello-server-ca.pem \
+  https://satellite.example.com/pub/katello-server-ca.pem
+Verify the certificate was downloaded successfully:
+sudo ls -la /etc/rhsm/ca/katello-server-ca.pem
+Check certificate details:
+sudo openssl x509 -in /etc/rhsm/ca/katello-server-ca.pem -text -noout | head -20
+Task 2: Register Hosts Using Subscription Manager
+Subtask 2.1: Basic Registration Process
+Register your RHEL system to the Satellite server using subscription-manager.
+
+Clean any existing registration (if applicable):
+sudo subscription-manager clean
+Register the system to Satellite:
+sudo subscription-manager register \
+  --serverurl=https://satellite.example.com:443/rhsm \
+  --baseurl=https://satellite.example.com/pulp/repos \
+  --org="Default_Organization" \
+  --username=admin \
+  --password=redhat123
+Verify registration status:
+sudo subscription-manager status
+List available subscriptions:
+sudo subscription-manager list --available
+Subtask 2.2: Attach Subscriptions
+After registration, attach appropriate subscriptions to enable repositories.
+
+Auto-attach subscriptions based on system hardware:
+sudo subscription-manager attach --auto
+Verify attached subscriptions:
+sudo subscription-manager list --consumed
+Check enabled repositories:
+sudo subscription-manager repos --list-enabled
+Subtask 2.3: Enable Required Repositories
+Enable specific repositories needed for your RHEL system.
+
+List all available repositories:
+sudo subscription-manager repos --list
+Enable BaseOS and AppStream repositories:
+sudo subscription-manager repos \
+  --enable=rhel-8-for-x86_64-baseos-rpms \
+  --enable=rhel-8-for-x86_64-appstream-rpms
+Verify repository configuration:
+sudo yum repolist enabled
+Task 3: Apply Activation Keys for RHEL Systems
+Subtask 3.1: Create Activation Key on Satellite
+First, create an activation key through the Satellite web interface or API.
+
+Access Satellite web interface at https://satellite.example.com
+
+Navigate to Content > Activation Keys
+
+Create new activation key with these settings:
+
+Name: RHEL8-Production
+Environment: Production
+Content View: RHEL8-CV
+Usage Limit: Unlimited
+Add subscriptions to the activation key:
+
+Select appropriate RHEL subscriptions
+Configure auto-attach settings
+Subtask 3.2: Register Using Activation Key
+Use the activation key for automated registration without username/password.
+
+Unregister current system (for demonstration):
+sudo subscription-manager unregister
+Register using activation key:
+sudo subscription-manager register \
+  --serverurl=https://satellite.example.com:443/rhsm \
+  --baseurl=https://satellite.example.com/pulp/repos \
+  --org="Default_Organization" \
+  --activationkey="RHEL8-Production"
+Verify registration with activation key:
+sudo subscription-manager identity
+Check auto-attached subscriptions:
+sudo subscription-manager list --consumed
+Subtask 3.3: Configure System Using Activation Key
+Activation keys can automatically configure repositories and install packages.
+
+Verify enabled repositories from activation key:
+sudo yum repolist enabled
+Install katello-agent for enhanced Satellite integration:
+sudo yum install -y katello-agent
+Start and enable goferd service:
+sudo systemctl enable --now goferd
+Verify service status:
+sudo systemctl status goferd
+Task 4: Validate Registration via Satellite Dashboard
+Subtask 4.1: Access Satellite Web Interface
+Verify system registration through the Satellite dashboard.
+
+Open web browser and navigate to:
+
+https://satellite.example.com
+Login with credentials:
+
+Username: admin
+Password: redhat123
+Navigate to Hosts > All Hosts to view registered systems
+
+Subtask 4.2: Verify Host Information
+Check that your registered system appears correctly in Satellite.
+
+Locate your registered host in the hosts list
+
+Click on the hostname to view detailed information
+
+Verify the following details:
+
+Operating System: Should show correct RHEL version
+Subscription Status: Should show "Valid"
+Last Check-in: Should show recent timestamp
+Content View: Should match assigned content view
+Lifecycle Environment: Should show correct environment
+Subtask 4.3: Review Subscription Details
+Examine subscription and repository information for the registered host.
+
+Click on Subscriptions tab for the host
+
+Verify attached subscriptions:
+
+Check subscription names and quantities
+Confirm expiration dates
+Review subscription status
+Navigate to Repository Sets tab:
+
+Verify enabled repositories
+Check repository synchronization status
+Review Packages tab:
+
+View installed packages
+Check for available updates
+Subtask 4.4: Test Remote Management
+Verify that Satellite can manage the registered system remotely.
+
+Navigate to Hosts > All Hosts
+
+Select your registered host
+
+Click Actions dropdown and test:
+
+Run Job: Execute a simple command like uptime
+Package Actions: Install or update a package
+Reboot Host: Schedule a system reboot
+Monitor job execution in Monitor > Jobs
+
+Troubleshooting Common Issues
+Registration Failures
+If registration fails, check these common issues:
+
+Certificate problems:
+sudo rm -f /etc/rhsm/ca/katello-server-ca.pem
+sudo wget -O /etc/rhsm/ca/katello-server-ca.pem \
+  https://satellite.example.com/pub/katello-server-ca.pem
+Network connectivity:
+curl -k https://satellite.example.com/rhsm/consumers
+Clean previous registration:
+sudo subscription-manager clean
+sudo rm -f /etc/pki/consumer/*.pem
+Subscription Issues
+For subscription-related problems:
+
+Refresh subscription data:
+sudo subscription-manager refresh
+Check subscription status:
+sudo subscription-manager status
+Re-attach subscriptions:
+sudo subscription-manager attach --auto
+Repository Problems
+If repositories are not working:
+
+Clear yum cache:
+sudo yum clean all
+Regenerate repository configuration:
+sudo subscription-manager repos --list-enabled
+Test repository access:
+sudo yum repolist
+Verification Commands
+Use these commands to verify successful registration:
+
+# Check registration status
+sudo subscription-manager status
+
+# Verify identity
+sudo subscription-manager identity
+
+# List consumed subscriptions
+sudo subscription-manager list --consumed
+
+# Check enabled repositories
+sudo subscription-manager repos --list-enabled
+
+# Test repository access
+sudo yum repolist enabled
+
+# Verify katello-agent
+sudo systemctl status goferd
+
+# Check last communication with Satellite
+sudo katello-package-upload
+Conclusion
+In this lab, you have successfully accomplished several critical system management tasks:
+
+What You Learned:
+
+System Registration: You mastered the process of registering RHEL systems to Red Hat Satellite using subscription-manager, establishing secure communication between client systems and the centralized management server.
+
+Activation Keys: You created and applied activation keys, which streamline the registration process and enable automated system provisioning with predefined configurations, subscriptions, and repository access.
+
+Subscription Management: You learned to attach and manage subscriptions, ensuring your systems have access to the appropriate software repositories and updates based on your organization's entitlements.
+
+Dashboard Validation: You verified successful registration through the Satellite web interface, gaining visibility into system status, subscription compliance, and management capabilities.
+
+Why This Matters: This knowledge is essential for enterprise Linux environments because it enables:
+
+Centralized Management: All RHEL systems can be managed from a single Satellite server
+Compliance Tracking: Organizations can monitor subscription usage and ensure license compliance
+Automated Provisioning: New systems can be quickly deployed with consistent configurations
+Security and Updates: Centralized patch management and security updates across the infrastructure
+Cost Optimization: Better visibility into subscription usage helps optimize licensing costs
+These skills are fundamental for Red Hat Certified Specialists and are directly applicable in production environments where managing dozens or hundreds of RHEL systems efficiently is crucial for operational success.
