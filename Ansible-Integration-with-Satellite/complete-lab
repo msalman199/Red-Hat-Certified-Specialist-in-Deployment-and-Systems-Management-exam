@@ -1,0 +1,314 @@
+Lab 10: Ansible Integration with Satellite
+Objectives
+By the end of this lab, students will be able to:
+
+Configure Red Hat Satellite as an Ansible control node
+Deploy and manage Ansible roles from Satellite interface
+Create and execute Ansible playbooks through Satellite
+Understand the integration benefits between Satellite and Ansible
+Automate system management tasks using Satellite's Ansible capabilities
+Prerequisites
+Before starting this lab, students should have:
+
+Basic understanding of Linux system administration
+Familiarity with Red Hat Satellite concepts (hosts, content views, activation keys)
+Basic knowledge of Ansible concepts (playbooks, roles, inventory)
+Experience with command-line interface and text editors
+Understanding of YAML syntax basics
+Lab Environment
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines for this lab. Simply click Start Lab to access your environment - no need to build your own virtual machines.
+
+Your lab environment includes:
+
+Satellite Server: Pre-installed Red Hat Satellite 6.x
+Managed Hosts: 2-3 RHEL systems registered to Satellite
+Network Configuration: All systems properly networked and accessible
+Task 1: Configure Satellite as an Ansible Control Node
+Subtask 1.1: Enable Ansible Plugin in Satellite
+First, we need to enable the Ansible plugin functionality within Satellite.
+
+Access Satellite Web Interface
+
+# Open your web browser and navigate to your Satellite server
+https://satellite.example.com
+Login to Satellite
+
+Username: admin
+Password: redhat123 (or as provided in your lab environment)
+Enable Ansible Plugin
+
+Navigate to Administer → Settings → Ansible
+
+Configure the following settings:
+
+Ansible roles path: /etc/ansible/roles:/usr/share/ansible/roles
+Ansible callback: foreman
+Ansible inventory: foreman
+Install Required Packages on Satellite Server
+
+SSH to your Satellite server and run:
+
+# Install Ansible and required packages
+sudo dnf install -y ansible python3-requests
+
+# Install Ansible collections for Satellite
+ansible-galaxy collection install theforeman.foreman
+Subtask 1.2: Configure Ansible Settings
+Create Ansible Configuration File
+
+sudo mkdir -p /etc/ansible
+sudo tee /etc/ansible/ansible.cfg > /dev/null << 'EOF'
+[defaults]
+host_key_checking = False
+inventory = /etc/ansible/hosts
+roles_path = /etc/ansible/roles:/usr/share/ansible/roles
+callback_plugins = /usr/lib/python3.9/site-packages/ansible_runner/display_callback/callback
+stdout_callback = foreman
+
+[inventory]
+enable_plugins = foreman.foreman
+
+[callback_foreman]
+url = https://satellite.example.com
+ssl_cert = /etc/pki/katello/certs/katello-apache.crt
+ssl_key = /etc/pki/katello/private/katello-apache.key
+verify_certs = /etc/pki/katello/certs/katello-default-ca.crt
+EOF
+Set Proper Permissions
+
+sudo chown -R foreman:foreman /etc/ansible
+sudo chmod 644 /etc/ansible/ansible.cfg
+Subtask 1.3: Configure Satellite Inventory Plugin
+Create Foreman Inventory Configuration
+
+sudo tee /etc/ansible/foreman.yml > /dev/null << 'EOF'
+plugin: theforeman.foreman.foreman
+url: https://satellite.example.com
+user: admin
+password: redhat123
+validate_certs: False
+group_prefix: foreman_
+want_facts: True
+want_hostcollections: True
+want_ansible_ssh_host: True
+EOF
+Test Inventory Connection
+
+# Test the inventory plugin
+ansible-inventory -i /etc/ansible/foreman.yml --list
+Task 2: Deploy and Manage Ansible Roles from Satellite
+Subtask 2.1: Import Ansible Roles
+Access Ansible Roles in Satellite Web UI
+
+Navigate to Configure → Ansible → Roles
+
+Import Roles from Ansible Galaxy
+
+Click Import from [hostname] button to import available roles from the Satellite server.
+
+Install Common Roles via Command Line
+
+# Install useful roles from Ansible Galaxy
+sudo ansible-galaxy install geerlingguy.apache
+sudo ansible-galaxy install geerlingguy.mysql
+sudo ansible-galaxy install linux-system-roles.timesync
+sudo ansible-galaxy install linux-system-roles.selinux
+Verify Role Installation
+
+# List installed roles
+ansible-galaxy list
+
+# Check roles directory
+ls -la /etc/ansible/roles/
+Subtask 2.2: Create Custom Ansible Role
+Create a Custom Role Structure
+
+# Create custom role for system configuration
+sudo ansible-galaxy init /etc/ansible/roles/system_config
+Define Role Tasks ```bash sudo tee /etc/ansible/roles/system_config/tasks/main.yml > /dev/null << 'EOF'
+name: Update system packages yum: name: "*" state: latest when: ansible_os_family == "RedHat"
+
+name: Install essential packages yum: name: - vim - wget - curl - htop state: present
+
+name: Configure timezone timezone: name: "{{ system_timezone | default('America/New_York') }}"
+
+name: Create system user user: name: "{{ system_user | default('sysadmin') }}" groups: wheel append: yes create_home: yes EOF
+
+
+Define Role Variables ```bash sudo tee /etc/ansible/roles/system_config/defaults/main.yml > /dev/null << 'EOF'
+system_timezone: "America/New_York" system_user: "sysadmin" EOF
+
+
+Subtask 2.3: Import Custom Role into Satellite
+Import Roles in Satellite Web UI
+
+Go to Configure → Ansible → Roles and click Import from [satellite-server]
+
+Verify Role Import
+
+You should see your custom roles listed along with the Galaxy roles.
+
+Task 3: Automate Tasks Using Ansible Playbooks from Satellite
+Subtask 3.1: Create Ansible Playbooks
+Create Playbooks Directory
+
+sudo mkdir -p /etc/ansible/playbooks
+sudo chown foreman:foreman /etc/ansible/playbooks
+Create System Configuration Playbook ```bash sudo tee /etc/ansible/playbooks/system_setup.yml > /dev/null << 'EOF'
+name: System Configuration Playbook hosts: all become: yes vars: system_timezone: "America/New_York" system_user: "sysadmin"
+
+tasks:
+
+name: Include system_config role include_role: name: system_config
+
+name: Configure firewall firewalld: service: ssh permanent: yes state: enabled immediate: yes
+
+name: Start and enable chronyd systemd: name: chronyd state: started enabled: yes
+
+EOF
+
+
+Create Web Server Deployment Playbook ```bash sudo tee /etc/ansible/playbooks/webserver_deploy.yml > /dev/null << 'EOF'
+name: Deploy Apache Web Server hosts: webservers become: yes vars: apache_listen_port: 80 apache_vhosts: - servername: "{{ ansible_fqdn }}" documentroot: "/var/www/html" roles:
+
+geerlingguy.apache
+tasks:
+
+name: Create sample index page copy: content: |
+Server: {{ ansible_hostname }}
+Deployed via Satellite and Ansible
+
+IP Address: {{ ansible_default_ipv4.address }}
+
+dest: /var/www/html/index.html owner: apache group: apache mode: '0644'
+EOF ```
+
+Subtask 3.2: Execute Playbooks from Satellite Web Interface
+Access Job Templates
+
+Navigate to Hosts → Job Templates
+
+Create New Job Template
+
+Click New Job Template and configure:
+
+Name: System Configuration
+Job Category: Ansible Playbook
+Provider Type: Ansible
+Playbook: system_setup.yml
+Inventory: Foreman
+Configure Job Template Parameters
+
+# Template inputs (add these in the Inputs tab)
+system_timezone:
+  input_type: user_input
+  description: "System timezone"
+  default: "America/New_York"
+
+system_user:
+  input_type: user_input
+  description: "System user to create"
+  default: "sysadmin"
+Set Host Selection
+
+In the Locations and Organizations tabs, select appropriate values for your environment.
+
+Subtask 3.3: Run Ansible Jobs
+Execute Job Template
+
+Go to Hosts → All Hosts
+Select target hosts
+Click Select Action → Run Job
+Choose your System Configuration template
+Click Submit
+Monitor Job Execution
+
+Navigate to Monitor → Jobs to view:
+
+Job status and progress
+Real-time output
+Success/failure status per host
+Detailed logs
+Run Playbook via Command Line (Alternative)
+
+# Execute playbook directly
+ansible-playbook -i /etc/ansible/foreman.yml /etc/ansible/playbooks/system_setup.yml
+
+# Execute with specific host group
+ansible-playbook -i /etc/ansible/foreman.yml /etc/ansible/playbooks/webserver_deploy.yml --limit webservers
+Subtask 3.4: Create Host Groups with Ansible Roles
+Create Host Group with Ansible Roles
+
+Navigate to Configure → Host Groups
+
+Create a new host group:
+
+Name: Web Servers
+Ansible Roles: Select geerlingguy.apache and system_config
+Assign Hosts to Host Group
+
+Go to Hosts → All Hosts
+Edit a host and assign it to the Web Servers host group
+Run Ansible Roles on Host Group
+
+Select hosts in the Web Servers group
+Click Select Action → Play Ansible roles
+Confirm execution
+Verification and Testing
+Verify Ansible Integration
+Check Ansible Configuration
+
+# Verify Ansible can connect to Satellite
+ansible --version
+ansible-config dump | grep -i foreman
+Test Inventory Integration
+
+# List all hosts from Satellite inventory
+ansible all -i /etc/ansible/foreman.yml --list-hosts
+
+# Test connectivity
+ansible all -i /etc/ansible/foreman.yml -m ping
+Verify Role Execution
+
+# Check if services are running on managed hosts
+ansible all -i /etc/ansible/foreman.yml -m service -a "name=chronyd state=started" --become
+Troubleshooting Common Issues
+Issue 1: Inventory Plugin Not Working
+
+# Check Python dependencies
+sudo dnf install -y python3-requests python3-pyyaml
+
+# Verify Satellite API access
+curl -k -u admin:redhat123 https://satellite.example.com/api/v2/hosts
+Issue 2: Role Import Failures
+
+# Check role permissions
+sudo chown -R foreman:foreman /etc/ansible/roles
+sudo chmod -R 755 /etc/ansible/roles
+
+# Restart Satellite services
+sudo foreman-maintain service restart
+Issue 3: Job Execution Failures
+
+# Check Ansible logs
+sudo tail -f /var/log/foreman/production.log
+
+# Verify SSH connectivity
+ansible all -i /etc/ansible/foreman.yml -m setup --limit hostname
+Conclusion
+In this lab, you have successfully:
+
+Configured Satellite as an Ansible Control Node: You integrated Ansible functionality directly into Red Hat Satellite, enabling centralized automation management.
+
+Deployed and Managed Ansible Roles: You imported roles from Ansible Galaxy, created custom roles, and managed them through the Satellite interface.
+
+Automated Tasks Using Playbooks: You created and executed Ansible playbooks from Satellite, demonstrating how to automate system configuration and application deployment.
+
+Why This Matters: The integration of Ansible with Satellite provides a powerful combination for enterprise system management. This integration allows you to:
+
+Leverage Satellite's inventory management with Ansible's automation capabilities
+Centralize configuration management and compliance reporting
+Scale automation across large infrastructures efficiently
+Maintain audit trails and job history through Satellite's interface
+Combine patch management with configuration automation
+This knowledge is essential for the Red Hat Certified Specialist in Deployment and Systems Management exam and provides practical skills for managing enterprise Linux environments at scale. The ability to integrate these tools effectively makes you valuable in organizations seeking to modernize their infrastructure management practices.
