@@ -1,0 +1,285 @@
+Lab 1: Introduction to Red Hat Satellite 6
+Objectives
+By the end of this lab, students will be able to:
+
+Understand the core components and architecture of Red Hat Satellite 6
+Successfully install and configure Red Hat Satellite 6 on a Linux system
+Identify and explain the roles of key Satellite components: Capsule, Smart Proxy, Pulp, Foreman, and Katello
+Register Red Hat Satellite to Red Hat Subscription Management (RHSM)
+Navigate the Satellite web interface and understand basic functionality
+Demonstrate understanding of Satellite's role in enterprise system management
+Prerequisites
+Before starting this lab, students should have:
+
+Basic knowledge of Linux system administration
+Understanding of package management concepts (RPM, YUM/DNF)
+Familiarity with command-line interface operations
+Basic networking concepts (DNS, DHCP, HTTP/HTTPS)
+Understanding of subscription management concepts
+Access to Red Hat Developer account (free registration available)
+Lab Environment
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines for this lab. Simply click Start Lab to access your environment - no need to build your own virtual machine or configure hardware.
+
+Your lab environment includes:
+
+Red Hat Enterprise Linux 8 or 9 server with minimum 20GB RAM and 300GB storage
+Internet connectivity for package downloads and registration
+Administrative (root) access to the system
+Task 1: Install and Configure Red Hat Satellite 6
+Subtask 1.1: Prepare the System Environment
+First, we need to ensure our system meets the requirements and is properly configured.
+
+Connect to your lab machine and verify system requirements:
+# Check system resources
+free -h
+df -h
+cat /etc/redhat-release
+Set the hostname for your Satellite server:
+# Set a fully qualified domain name (FQDN)
+hostnamectl set-hostname satellite.example.com
+
+# Verify the hostname
+hostnamectl status
+Configure the hosts file:
+# Edit the hosts file
+vi /etc/hosts
+
+# Add the following line (replace with your actual IP)
+192.168.1.100 satellite.example.com satellite
+Disable and stop firewalld (for lab purposes):
+systemctl stop firewalld
+systemctl disable firewalld
+Disable SELinux temporarily for installation:
+setenforce 0
+sed -i 's/SELINUX=enforcing/SELINUX=permissive/' /etc/selinux/config
+Subtask 1.2: Register System and Enable Repositories
+Register your system with Red Hat Subscription Management:
+# Register with your Red Hat credentials
+subscription-manager register --username your_username --password your_password
+
+# List available subscriptions
+subscription-manager list --available
+
+# Attach Red Hat Satellite subscription (use the pool ID from the list)
+subscription-manager attach --pool=POOL_ID_HERE
+Enable required repositories:
+# Enable Satellite repositories
+subscription-manager repos --enable=rhel-8-for-x86_64-baseos-rpms \
+--enable=rhel-8-for-x86_64-appstream-rpms \
+--enable=satellite-6.14-for-rhel-8-x86_64-rpms \
+--enable=satellite-maintenance-6.14-for-rhel-8-x86_64-rpms
+
+# Update the system
+dnf update -y
+Subtask 1.3: Install Red Hat Satellite
+Install the Satellite installer package:
+# Install satellite package
+dnf install satellite -y
+Run the Satellite installer:
+# Execute the installer with basic configuration
+satellite-installer --scenario satellite \
+--foreman-initial-admin-username admin \
+--foreman-initial-admin-password redhat123 \
+--foreman-initial-organization "Default Organization" \
+--foreman-initial-location "Default Location"
+Note: The installation process may take 30-60 minutes depending on your system performance.
+
+Verify the installation:
+# Check Satellite services status
+satellite-maintain service status
+
+# Verify web interface accessibility
+curl -k https://satellite.example.com
+Subtask 1.4: Initial Satellite Configuration
+Access the Satellite web interface:
+
+Open a web browser and navigate to: https://satellite.example.com
+Login with username: admin and password: redhat123
+Complete the initial setup wizard:
+
+Navigate through the welcome screens
+Configure your organization settings
+Set up initial location parameters
+Task 2: Understand Satellite Architecture Components
+Subtask 2.1: Explore Foreman Component
+Foreman is the core provisioning and configuration management component of Satellite.
+
+Access Foreman features through the web interface:
+
+Navigate to Hosts → All Hosts
+Explore Configure → Host Groups
+Review Infrastructure → Compute Resources
+Examine Foreman configuration files:
+
+# View main Foreman configuration
+cat /etc/foreman/settings.yaml
+
+# Check Foreman database configuration
+cat /etc/foreman/database.yml
+Verify Foreman services:
+# Check Foreman-related services
+systemctl status foreman
+systemctl status httpd
+Subtask 2.2: Understand Katello Component
+Katello provides content management capabilities including repository synchronization and content views.
+
+Explore Katello features in the web interface:
+
+Navigate to Content → Products
+Check Content → Content Views
+Review Content → Lifecycle Environments
+Examine Katello configuration:
+
+# View Katello configuration
+ls -la /etc/katello/
+
+# Check Katello database settings
+cat /etc/katello/katello.conf
+Subtask 2.3: Investigate Pulp Component
+Pulp handles repository management and content storage for Satellite.
+
+Check Pulp services and configuration:
+# Verify Pulp services
+systemctl status pulpcore-api
+systemctl status pulpcore-content
+systemctl status pulpcore-worker@*
+
+# View Pulp configuration
+cat /etc/pulp/settings.py
+Explore Pulp storage:
+# Check Pulp content storage
+ls -la /var/lib/pulp/
+du -sh /var/lib/pulp/media/
+Subtask 2.4: Examine Smart Proxy Functionality
+Smart Proxy provides various infrastructure services like DNS, DHCP, and TFTP.
+
+Check Smart Proxy services:
+# Verify Smart Proxy status
+systemctl status foreman-proxy
+
+# View Smart Proxy configuration
+cat /etc/foreman-proxy/settings.yml
+Explore Smart Proxy features in the web interface:
+Navigate to Infrastructure → Smart Proxies
+Click on your Satellite server to view enabled features
+Review available proxy features and their status
+Subtask 2.5: Understanding Capsule Servers
+Capsule Servers extend Satellite functionality to remote locations.
+
+View Capsule information:
+
+In the web interface, go to Infrastructure → Capsules
+Note that your main Satellite server also functions as a Capsule
+Check Capsule-related services:
+
+# Services that would run on Capsule servers
+systemctl status squid
+systemctl status tftp
+Task 3: Register Satellite to Red Hat Subscription Management
+Subtask 3.1: Verify Current Registration Status
+Check current subscription status:
+# View current registration
+subscription-manager status
+
+# List consumed subscriptions
+subscription-manager list --consumed
+
+# Check available repositories
+subscription-manager repos --list-enabled
+Subtask 3.2: Configure Satellite for Content Synchronization
+Create a manifest for your Satellite:
+
+Log into Red Hat Customer Portal (access.redhat.com)
+Navigate to Subscriptions → Subscription Allocations
+Create a new allocation for your Satellite
+Download the manifest file
+Upload the manifest to Satellite:
+
+In Satellite web interface, go to Content → Subscriptions
+Click Manage Manifest
+Upload your downloaded manifest file
+Subtask 3.3: Enable and Synchronize Content
+Enable Red Hat repositories:
+
+Navigate to Content → Red Hat Repositories
+Enable desired repositories (e.g., RHEL 8 BaseOS, AppStream)
+Click Enable Selected Repositories
+Create a sync plan:
+
+# Create a sync plan via CLI
+hammer sync-plan create \
+--name "Daily Sync" \
+--description "Daily repository synchronization" \
+--interval daily \
+--sync-date "2024-01-01 02:00:00" \
+--enabled true \
+--organization "Default Organization"
+Start initial synchronization:
+Go to Content → Products
+Select Red Hat Enterprise Linux for x86_64
+Click Sync Now for immediate synchronization
+Subtask 3.4: Verify Synchronization Status
+Monitor sync progress:
+# Check sync status via CLI
+hammer repository list --organization "Default Organization"
+
+# View sync status
+hammer sync-plan info --name "Daily Sync" --organization "Default Organization"
+Verify content availability:
+In web interface, navigate to Content → Products
+Check that repositories show package counts
+Verify last sync timestamps
+Troubleshooting Common Issues
+Issue 1: Installation Fails Due to Insufficient Resources
+Solution:
+
+# Check available memory and disk space
+free -h
+df -h
+
+# If insufficient, increase VM resources or clean up space
+dnf clean all
+Issue 2: Web Interface Not Accessible
+Solution:
+
+# Check httpd service
+systemctl status httpd
+systemctl restart httpd
+
+# Verify firewall settings
+firewall-cmd --list-all
+Issue 3: Subscription Registration Problems
+Solution:
+
+# Clean subscription data and re-register
+subscription-manager clean
+subscription-manager register --username your_username --password your_password
+Verification Steps
+To verify successful completion of this lab:
+
+Confirm Satellite installation:
+satellite-maintain service status
+Verify web interface access:
+
+Successfully log into https://satellite.example.com
+Navigate through main menu sections
+Check component functionality:
+
+Foreman: View host management features
+Katello: Access content management
+Pulp: Verify repository storage
+Smart Proxy: Check infrastructure services
+Validate RHSM registration:
+
+Manifest uploaded successfully
+Repositories enabled and syncing
+Content available for distribution
+Conclusion
+In this lab, you have successfully:
+
+Installed and configured Red Hat Satellite 6 on a Linux system, creating a centralized management platform for your infrastructure
+Explored the key architectural components including Foreman for provisioning, Katello for content management, Pulp for repository handling, Smart Proxy for infrastructure services, and understood the role of Capsule servers
+Registered your Satellite server with Red Hat Subscription Management and configured content synchronization
+Why This Matters: Red Hat Satellite 6 serves as a comprehensive systems management solution that enables organizations to efficiently manage large-scale Linux deployments. Understanding its architecture and components is crucial for system administrators who need to automate provisioning, manage content distribution, and maintain compliance across enterprise environments. The skills learned in this lab form the foundation for advanced Satellite operations including host provisioning, patch management, and configuration management.
+
+This knowledge directly supports preparation for the Red Hat Certified Specialist in Deployment and Systems Management exam and provides practical experience with enterprise-grade infrastructure management tools that are widely used in production environments.
