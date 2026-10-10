@@ -1,0 +1,270 @@
+Lab 2: Synchronizing Repositories
+Objectives
+By the end of this lab, students will be able to:
+
+Understand the fundamentals of repository synchronization in Red Hat Satellite
+Configure and synchronize content from Red Hat repositories to Satellite
+Add and configure custom third-party repositories
+Verify successful content synchronization through the Satellite web interface
+Troubleshoot common synchronization issues
+Implement best practices for repository management
+Prerequisites
+Before starting this lab, students should have:
+
+Basic understanding of Linux command line operations
+Familiarity with Red Hat Enterprise Linux (RHEL) package management
+Knowledge of YUM/DNF repository concepts
+Understanding of Red Hat Satellite architecture from Lab 1
+Access to Red Hat Customer Portal credentials (for demonstration purposes)
+Basic networking concepts (HTTP/HTTPS, proxy configurations)
+Lab Environment Setup
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines for this lab. Simply click Start Lab to access your environment - no need to build your own virtual machines or install software.
+
+Your lab environment includes:
+
+Red Hat Satellite 6.x server (pre-installed and configured)
+RHEL 8/9 client systems for testing
+Network connectivity to Red Hat repositories
+Web browser access to Satellite GUI
+Task 1: Synchronize Content from Red Hat to Satellite
+Subtask 1.1: Access Satellite Web Interface
+Open your web browser and navigate to your Satellite server:
+
+https://satellite.example.com
+Log in using the administrator credentials:
+
+Username: admin
+Password: redhat123 (or as provided in your lab environment)
+Verify the dashboard loads successfully and shows the main Satellite interface.
+
+Subtask 1.2: Configure Red Hat Repository Synchronization
+Navigate to Content Management:
+
+Click on Content in the main menu
+Select Red Hat Repositories
+Enable Red Hat Enterprise Linux repositories:
+
+Expand Red Hat Enterprise Linux for x86_64
+Locate Red Hat Enterprise Linux 8 for x86_64 - BaseOS (RPMs)
+Click the toggle switch to Enable this repository
+Repeat for Red Hat Enterprise Linux 8 for x86_64 - AppStream (RPMs)
+Configure repository settings:
+
+Click on the repository name to access detailed settings
+Verify the Download Policy is set to Immediate
+Note the Repository URL and GPG Key information
+Subtask 1.3: Initiate Repository Synchronization
+Start synchronization process:
+
+Navigate to Content > Products
+Find Red Hat Enterprise Linux for x86_64
+Click on the product name
+Select Repositories tab
+Click Select Action > Sync Now for each enabled repository
+Monitor synchronization progress:
+
+Navigate to Monitor > Tasks
+Look for tasks with names like "Synchronize repository"
+Click on individual tasks to view detailed progress
+Verify initial sync completion:
+
+# SSH to Satellite server and check sync status
+hammer repository list --organization "Default Organization"
+Task 2: Add and Configure Custom Repositories
+Subtask 2.1: Create Custom Product
+Access Products section:
+
+Navigate to Content > Products
+Click Create Product
+Configure new product:
+
+Name: Custom Software
+Label: custom-software
+Description: Third-party and custom software repositories
+Sync Plan: Leave blank for now
+Click Save
+Subtask 2.2: Add EPEL Repository
+Create EPEL repository:
+
+Within the Custom Software product, click Create Repository
+Configure the following settings:
+Name: EPEL 8
+Label: epel-8
+Type: yum
+URL: https://dl.fedoraproject.org/pub/epel/8/Everything/x86_64/
+Download Policy: On Demand
+GPG Key: Leave blank for now
+Add GPG key for EPEL:
+
+Navigate to Content > Content Credentials
+Click Create Content Credential
+Name: EPEL-8-GPG-KEY
+Type: GPG Key
+Content: Copy and paste the EPEL GPG key:
+-----BEGIN PGP PUBLIC KEY BLOCK-----
+
+mQINBFz3zvsBEADJOIIWllGudxnpvJnkxQz2CtoWI7godVnoclrdl83kVjqSQp+2
+dgxuG5mUiADUfYHaRQzxKw8efuQnwxzU9kZ70ngCxtmbQWGmUmfSThiapOz00018
++eo5MFabd2vdiGo1y+51m2sRDpN8qdCaqXko65cyMuLXrojJHIuvRA/x7iqOrRfy
+a8x3OxC4PEgl5pgDnP8pVK0lLYncDEQCN76D9ubhZQWhISF/zJI+e806V71hzfyL
+/Mt3mQm/li+lRKU25Usk9dWaf4NH/wZHMIPAkVJ4uD4H/uS49wqWnyiTYGT7hUbi
+ecF7crhLCmlRzvJR8mkRP6/4T/F3tNDPWZeDNEDVFUkTFHNU6/h2+O398MNY/fOh
+yKaNK3nnE0g6QJ1dOH31lXHARlpFOtWt3VmZU0JnWLeYdvap4Eff9qTWZJhI7Cq0
+Wm8DgLUpXgNlkmquvE7P2W5EAr2E5AqKQoDbfw/GiWdRvHWKeNGMRLnGI3QuoX3U
+pAlXD7v13VdZxNydvpeypbf/AfRyrHRKhkUj3cU1pYkM3DNZE77C5JUe6/0nxbt4
+ETUZBTgLgYJGP8c7PbkVnO6I/KgL1jw+7MW6Az8Ox+RXZLyGMVmbW/TMc8haJfKL
+MoUo3TVk8nPiUhoOC0/kI7j9ilFrBxBU5dUtF4ITAWc8xnG6jJs/IsvRpQARAQAB
+tChGZWRvcmEgRVBFTCAoOCkgPGVwZWxAZmVkb3JhcHJvamVjdC5vcmc+
+-----END PGP PUBLIC KEY BLOCK-----
+Associate GPG key with repository:
+
+Return to Custom Software > EPEL 8 repository
+Edit the repository settings
+Select EPEL-8-GPG-KEY from the GPG Key dropdown
+Click Save
+Subtask 2.3: Add Additional Custom Repository
+Create Docker CE repository:
+
+In Custom Software product, click Create Repository
+Configure settings:
+Name: Docker CE
+Label: docker-ce
+Type: yum
+URL: https://download.docker.com/linux/centos/8/x86_64/stable/
+Download Policy: On Demand
+Synchronize custom repositories:
+
+Select both custom repositories
+Click Select Action > Sync Now
+Monitor progress in Monitor > Tasks
+Task 3: Verify Content Synchronization via Satellite Dashboard
+Subtask 3.1: Dashboard Overview Verification
+Access main dashboard:
+
+Navigate to Monitor > Dashboard
+Review the Content section widgets
+Verify repository statistics:
+
+Check Repository Status widget
+Confirm all repositories show Success status
+Note the number of packages synchronized
+Review sync history:
+
+Navigate to Monitor > Tasks
+Filter tasks by Type: Repository Sync
+Verify recent synchronization tasks completed successfully
+Subtask 3.2: Detailed Content Verification
+Check Red Hat repositories:
+
+Navigate to Content > Products
+Click on Red Hat Enterprise Linux for x86_64
+Select Repositories tab
+Verify package counts for BaseOS and AppStream repositories:
+# Command line verification
+hammer repository info --name "Red Hat Enterprise Linux 8 for x86_64 - BaseOS RPMs" --organization "Default Organization"
+Verify custom repositories:
+
+Navigate to Custom Software product
+Check package counts for EPEL and Docker CE repositories
+Confirm last sync timestamps are recent
+Content view verification:
+
+Navigate to Content > Content Views
+Create a test content view including synchronized repositories:
+Name: Test-CV
+Description: Test content view for lab verification
+Add repositories from both Red Hat and Custom products
+Subtask 3.3: Package Search and Verification
+Search for specific packages:
+
+Navigate to Content > Packages
+Search for common packages:
+httpd (from RHEL BaseOS)
+nginx (from EPEL)
+docker-ce (from Docker repository)
+Verify package details:
+
+Click on individual packages to view:
+Version information
+Repository source
+Dependencies
+Description
+Generate content reports:
+
+# Generate repository sync report
+hammer report-template generate --name "Repository sync report" --organization "Default Organization"
+Advanced Configuration and Best Practices
+Sync Plans Configuration
+Create automated sync plan:
+
+Navigate to Content > Sync Plans
+Click Create Sync Plan
+Configure:
+Name: Daily Sync Plan
+Description: Automated daily synchronization
+Interval: Daily
+Start Date: Tomorrow's date
+Start Time: 02:00 AM
+Associate products with sync plan:
+
+Add both Red Hat and Custom products to the sync plan
+Verify the schedule appears in Monitor > Tasks
+Repository Optimization
+Configure download policies:
+
+Immediate: Downloads all content during sync (recommended for frequently used repos)
+On Demand: Downloads content when requested (saves storage space)
+Background: Downloads content in background after initial metadata sync
+Set up repository mirroring:
+
+# Enable mirroring for better performance
+hammer repository update --name "EPEL 8" --product "Custom Software" --organization "Default Organization" --mirror-on-sync true
+Troubleshooting Common Issues
+Synchronization Failures
+Network connectivity issues:
+
+# Test repository connectivity
+curl -I https://dl.fedoraproject.org/pub/epel/8/Everything/x86_64/
+
+# Check Satellite proxy settings
+hammer settings list --search proxy
+Authentication problems:
+
+Verify Red Hat subscription credentials
+Check manifest validity in Content > Subscriptions
+Storage space issues:
+
+# Check available disk space
+df -h /var/lib/pulp
+
+# Clean up old sync data if needed
+foreman-rake katello:delete_orphaned_content
+Performance Optimization
+Monitor sync performance:
+
+# Check active sync processes
+ps aux | grep pulp
+
+# Monitor system resources during sync
+top -p $(pgrep -d',' pulp)
+Adjust concurrent sync settings:
+
+Navigate to Administer > Settings > Katello
+Modify sync_concurrent_downloads parameter
+Recommended: 2-4 for most environments
+Conclusion
+In this lab, you have successfully accomplished the following key objectives:
+
+Repository Synchronization Mastery: You learned how to synchronize content from Red Hat's official repositories to your Satellite server, ensuring your organization has access to the latest RHEL packages and updates in a controlled environment.
+
+Custom Repository Integration: You gained hands-on experience adding and configuring third-party repositories like EPEL and Docker CE, expanding your software catalog beyond Red Hat's offerings while maintaining security through GPG key verification.
+
+Content Verification and Monitoring: You developed skills in using Satellite's dashboard and monitoring tools to verify successful synchronization, track sync history, and ensure content integrity across all configured repositories.
+
+Automation and Best Practices: You implemented sync plans for automated repository updates and learned optimization techniques that will help maintain efficient, reliable content synchronization in production environments.
+
+Why This Matters: Repository synchronization is fundamental to enterprise Linux management. By mastering these skills, you can ensure your organization maintains secure, up-to-date software repositories while controlling what content is available to your systems. This capability is essential for maintaining security compliance, managing software lifecycles, and providing reliable service to end users.
+
+These skills directly support the Red Hat Certified Specialist in Deployment and Systems Management certification objectives and prepare you for real-world scenarios where reliable content management is critical to organizational success.
+
+Next Steps: In the following labs, you'll build upon this foundation by creating content views, managing lifecycle environments, and deploying synchronized content to client systems, completing the full content management workflow in Red Hat Satellite.
