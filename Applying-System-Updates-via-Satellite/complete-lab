@@ -1,0 +1,325 @@
+Lab 8: Applying System Updates via Satellite
+Objectives
+By the end of this lab, students will be able to:
+
+Understand the Red Hat Satellite update management workflow
+Apply errata and security updates to RHEL systems using Satellite
+Schedule automated update jobs for managed hosts
+Monitor update progress and verify completion status
+Troubleshoot common update-related issues in Satellite environments
+Prerequisites
+Before starting this lab, students should have:
+
+Basic understanding of Red Hat Enterprise Linux (RHEL) administration
+Familiarity with package management using yum or dnf
+Knowledge of Red Hat Satellite concepts (hosts, content views, lifecycle environments)
+Understanding of system patching and security update concepts
+Access to a web browser for Satellite Web UI navigation
+Lab Environment
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines for this lab. Simply click Start Lab to access your environment - no need to build your own virtual machines.
+
+Your lab environment includes:
+
+Red Hat Satellite Server (satellite.example.com)
+Two RHEL client systems (client1.example.com, client2.example.com)
+Pre-configured content views and lifecycle environments
+Sample errata and updates available for testing
+Task 1: Understanding and Identifying Available Errata
+Subtask 1.1: Access Satellite Web Interface
+Open your web browser and navigate to the Satellite server:
+
+https://satellite.example.com
+Log in using the provided credentials:
+
+Username: admin
+Password: redhat123
+Once logged in, familiarize yourself with the main dashboard showing system status and available updates.
+
+Subtask 1.2: Explore Available Errata
+Navigate to Content → Errata from the main menu.
+
+Review the different types of errata available:
+
+Security: Critical security patches
+Bugfix: Bug fixes and improvements
+Enhancement: New features and enhancements
+Click on a security erratum to view detailed information including:
+
+Affected packages
+CVE numbers
+Severity level
+Description of the issue
+Subtask 1.3: Check Host-Specific Errata
+Navigate to Hosts → All Hosts.
+
+Select client1.example.com from the host list.
+
+Click on the Errata tab to view errata applicable to this specific host.
+
+Note the different categories and count of available updates:
+
+Security: 5 errata
+Bugfix: 12 errata
+Enhancement: 3 errata
+Task 2: Applying Errata to Individual Hosts
+Subtask 2.1: Apply Security Updates via Web UI
+From the host details page for client1.example.com, click on the Errata tab.
+
+Filter errata by type by clicking Security to show only security updates.
+
+Select multiple security errata by checking the boxes next to them.
+
+Click Apply Selected button.
+
+In the confirmation dialog:
+
+Review the selected errata
+Click Confirm to proceed
+Monitor the job progress in the Jobs section that appears.
+
+Subtask 2.2: Apply Updates Using Hammer CLI
+Access the Satellite server terminal and use Hammer CLI to apply errata:
+# List available errata for a specific host
+hammer host errata list --host client2.example.com
+
+# Apply specific erratum by ID
+hammer host errata apply --host client2.example.com --errata-ids RHSA-2023-1234
+
+# Apply all security errata to a host
+hammer host errata apply --host client2.example.com --errata-ids $(hammer host errata list --host client2.example.com --search "type=security" --fields "Erratum ID" --csv | tail -n +2 | tr '\n' ',')
+Verify the job was created successfully:
+# List recent jobs for the host
+hammer job-invocation list --search "host=client2.example.com" --order "id DESC" --per-page 5
+Subtask 2.3: Bulk Apply Errata to Multiple Hosts
+In the Satellite Web UI, navigate to Hosts → All Hosts.
+
+Select multiple hosts by checking the boxes next to client1.example.com and client2.example.com.
+
+Click Select Action → Apply Errata.
+
+Choose errata to apply:
+
+Select Security errata only
+Click Next
+Review the job details and click Submit to apply updates to all selected hosts.
+
+Task 3: Scheduling Update Jobs
+Subtask 3.1: Schedule Immediate Updates
+Navigate to Hosts → All Hosts and select a host.
+
+Go to the Errata tab and select errata to apply.
+
+Click Apply Selected.
+
+In the job scheduling interface:
+
+Set Schedule to Execute now
+Configure Execution timeout: 3600 seconds
+Click Submit
+Subtask 3.2: Schedule Future Updates
+Select errata for a host as in the previous subtask.
+
+In the job scheduling interface:
+
+Set Schedule to Schedule for later
+Choose Start at: Tomorrow at 2:00 AM
+Set Repeat: Weekly
+Configure Maximum iterations: 4
+Review the schedule summary and click Submit.
+
+Subtask 3.3: Create Recurring Update Jobs Using Hammer
+Create a recurring job template for security updates:
+# Create a recurring job for security updates
+hammer recurring-logic create \
+  --cron-line "0 2 * * 0" \
+  --end-time "2024-12-31 23:59:59" \
+  --max-iteration 52
+
+# Get the recurring logic ID from the output
+RECURRING_ID=1
+
+# Create job template for errata application
+hammer job-template create \
+  --name "Weekly Security Updates" \
+  --job-category "Katello" \
+  --provider-type "script" \
+  --template-inputs "errata=security"
+Schedule the recurring job:
+# Schedule recurring errata application
+hammer job-invocation create \
+  --job-template "Apply Errata - Katello Script Default" \
+  --search-query "name ~ client" \
+  --inputs "errata=security" \
+  --recurring-logic-id $RECURRING_ID
+Task 4: Monitoring Update Progress and Completion
+Subtask 4.1: Monitor Jobs via Web Interface
+Navigate to Monitor → Jobs in the Satellite Web UI.
+
+Locate your recent update jobs and observe the status indicators:
+
+Pending: Job is queued
+Running: Job is currently executing
+Success: Job completed successfully
+Failed: Job encountered errors
+Click on a running job to view real-time progress:
+
+Overall progress percentage
+Individual host status
+Live output logs
+Subtask 4.2: Monitor Job Details and Logs
+Select a completed job from the jobs list.
+
+Review the job summary showing:
+
+Total hosts: 2
+Successful: 2
+Failed: 0
+Duration: 5 minutes 23 seconds
+Click on individual hosts to view detailed execution logs:
+
+# Example log output
+Started at 2024-01-15 14:30:15 UTC
+Downloading packages...
+Installing updates...
+Package kernel-4.18.0-425.el8 installed
+Package openssl-1.1.1k-7.el8_6 updated
+Completed at 2024-01-15 14:35:38 UTC
+Subtask 4.3: Verify Update Application
+Use Hammer CLI to verify errata application:
+# Check applied errata for a host
+hammer host errata list --host client1.example.com --search "installable=false"
+
+# Verify specific packages were updated
+hammer host package list --host client1.example.com --search "name=kernel"
+
+# Check host compliance status
+hammer host info --name client1.example.com --fields "Errata status"
+Connect to the client system to verify updates:
+# SSH to client system
+ssh root@client1.example.com
+
+# Check recently installed packages
+rpm -qa --last | head -10
+
+# Verify kernel version
+uname -r
+
+# Check for pending reboots
+needs-restarting -r
+Subtask 4.4: Generate Update Reports
+In Satellite Web UI, navigate to Monitor → Reports.
+
+Generate an Errata Report:
+
+Select date range: Last 30 days
+Choose hosts: All managed hosts
+Include: Applied errata details
+Format: PDF
+Create a Host Status Report:
+
+Filter by: Errata status
+Group by: Security compliance
+Export format: CSV
+Use Hammer CLI to generate reports:
+
+# Generate errata summary report
+hammer report-template generate \
+  --name "Errata Summary" \
+  --inputs "hosts=client1.example.com,client2.example.com"
+
+# Export host errata status
+hammer host list \
+  --search "errata_status != 0" \
+  --fields "Name,Errata status,Security,Bugfix,Enhancement" \
+  --csv > errata_status_report.csv
+Task 5: Advanced Update Management
+Subtask 5.1: Create Custom Errata Filters
+Navigate to Content → Content Views.
+
+Select your content view and go to Filters tab.
+
+Create a new filter:
+
+Name: Critical Security Only
+Type: Erratum - by ID
+Inclusion: Include
+Add filter rules:
+
+Errata Type: Security
+Severity: Critical, Important
+Publish a new version of the content view with the filter applied.
+
+Subtask 5.2: Manage Update Maintenance Windows
+Create a maintenance window schedule:
+# Create maintenance window for weekend updates
+hammer maintenance-window create \
+  --name "Weekend Maintenance" \
+  --start-time "2024-01-20 02:00:00" \
+  --end-time "2024-01-20 06:00:00" \
+  --recurring weekly
+
+# Assign hosts to maintenance window
+hammer maintenance-window add-host \
+  --name "Weekend Maintenance" \
+  --host client1.example.com
+Schedule updates within maintenance windows:
+# Schedule job during maintenance window
+hammer job-invocation create \
+  --job-template "Apply Errata - Katello Script Default" \
+  --search-query "name = client1.example.com" \
+  --start-at "2024-01-20 02:30:00" \
+  --inputs "errata=security"
+Troubleshooting Common Issues
+Issue 1: Job Fails with Package Conflicts
+Symptoms: Update job fails with dependency resolution errors
+
+Solution:
+
+# Check for conflicting packages
+hammer host package list --host client1.example.com --search "upgradable=true"
+
+# Resolve conflicts by updating all related packages
+hammer job-invocation create \
+  --job-template "Package Action - Katello Script Default" \
+  --search-query "name = client1.example.com" \
+  --inputs "action=update,package=*"
+Issue 2: Host Not Receiving Updates
+Symptoms: No errata showing for registered host
+
+Solution:
+
+Verify host subscription status:
+hammer host subscription list --host client1.example.com
+Check content view assignment:
+hammer host info --name client1.example.com --fields "Content view,Lifecycle environment"
+Refresh host package profile:
+hammer host refresh-facts --name client1.example.com
+Issue 3: Slow Update Performance
+Symptoms: Updates taking excessive time to complete
+
+Solution:
+
+Check Satellite server resources and tune settings
+Configure local repository mirrors
+Adjust concurrent job limits:
+# Modify foreman settings for better performance
+hammer settings set --name "foreman_tasks_proxy_batch_size" --value "10"
+hammer settings set --name "katello_applicability_batch_size" --value "50"
+Conclusion
+In this lab, you have successfully learned how to manage system updates using Red Hat Satellite. You accomplished the following key tasks:
+
+Identified and reviewed available errata for security, bugfix, and enhancement updates
+Applied updates to individual and multiple hosts using both Web UI and Hammer CLI
+Scheduled immediate and recurring update jobs with proper timing and maintenance windows
+Monitored update progress and completion through various interfaces and reporting tools
+Implemented advanced update management including custom filters and maintenance windows
+These skills are essential for maintaining secure and up-to-date RHEL environments in enterprise settings. Proper update management ensures systems remain protected against security vulnerabilities while maintaining stability through controlled deployment processes.
+
+The ability to automate and schedule updates reduces administrative overhead while providing comprehensive visibility into system compliance status. This knowledge directly supports the Red Hat Certified Specialist in Deployment and Systems Management certification objectives and prepares you for real-world satellite administration scenarios.
+
+Key Takeaways:
+
+Satellite provides centralized update management for large RHEL deployments
+Scheduling and automation reduce manual intervention and improve consistency
+Monitoring and reporting capabilities ensure compliance and audit readiness
+Proper filtering and maintenance windows minimize service disruption during updates
