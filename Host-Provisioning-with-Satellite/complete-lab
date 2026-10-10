@@ -1,0 +1,600 @@
+Lab 5: Host Provisioning with Satellite
+Objectives
+By the end of this lab, students will be able to:
+
+Configure and set up provisioning templates including Kickstart, PXE, and iPXE
+Configure DHCP, DNS, and TFTP services through Capsule Servers
+Provision bare-metal, virtual, and cloud instances using Red Hat Satellite
+Monitor and troubleshoot the provisioning process
+Understand the complete host lifecycle management workflow
+Implement automated host deployment strategies
+Prerequisites
+Before starting this lab, students should have:
+
+Basic understanding of Linux system administration
+Familiarity with Red Hat Enterprise Linux (RHEL) 8 or 9
+Knowledge of networking concepts (DHCP, DNS, TFTP)
+Understanding of virtualization concepts
+Basic command-line interface experience
+Completed previous Satellite labs or equivalent knowledge
+Required Knowledge Areas
+Linux file system structure
+Network configuration basics
+Package management with yum/dnf
+Service management with systemctl
+Basic understanding of provisioning concepts
+Lab Environment Setup
+Al Nafi Cloud Machines: This lab uses pre-configured Linux-based cloud machines provided by Al Nafi. Simply click Start Lab to access your environment - no need to build your own virtual machines.
+
+Environment Details
+Satellite Server: satellite.example.com (192.168.1.10)
+Capsule Server: capsule.example.com (192.168.1.20)
+Target Host: Will be provisioned during the lab
+Network Range: 192.168.1.0/24
+Task 1: Set Up Provisioning Templates
+Subtask 1.1: Configure Kickstart Templates
+Kickstart templates automate the installation process for RHEL systems.
+
+Step 1: Access Satellite Web Interface
+Open your web browser and navigate to the Satellite server
+Log in with administrator credentials
+# Access Satellite web interface
+https://satellite.example.com
+Username: admin
+Password: [provided-password]
+Step 2: Create Custom Kickstart Template
+Navigate to Hosts → Templates → Provisioning Templates
+Click Create Template
+Select Kickstart as the template type
+<%#
+kind: provision
+name: Custom RHEL Kickstart
+model: ProvisioningTemplate
+oses:
+- RedHat Enterprise Linux 8
+- RedHat Enterprise Linux 9
+%>
+
+# Custom Kickstart Template for RHEL
+install
+url --url="<%= @medium_uri %>"
+lang en_US.UTF-8
+keyboard us
+timezone America/New_York --isUtc
+
+# Network configuration
+network --bootproto=dhcp --device=<%= @host.mac %> --hostname=<%= @host.name %>
+
+# Root password (will be set during provisioning)
+rootpw --iscrypted <%= root_pass %>
+
+# Firewall configuration
+firewall --enabled --ssh
+
+# SELinux configuration
+selinux --enforcing
+
+# Disk partitioning
+zerombr
+clearpart --all --initlabel
+autopart --type=lvm
+
+# Package selection
+%packages --ignoremissing
+@core
+@base
+openssh-server
+wget
+curl
+vim
+%end
+
+# Post-installation script
+%post --log=/root/ks-post.log
+# Register with Satellite
+curl -o /tmp/bootstrap.py <%= foreman_url('built') %>
+python3 /tmp/bootstrap.py
+
+# Enable and start SSH
+systemctl enable sshd
+systemctl start sshd
+
+# Update system
+dnf update -y
+
+# Signal completion
+curl -X POST <%= foreman_url('built') %>
+%end
+
+reboot
+Step 3: Save and Associate Template
+Click Submit to save the template
+Navigate to Administer → Settings → Provisioning
+Set the default Kickstart template for your operating system
+Subtask 1.2: Configure PXE Templates
+PXE (Preboot Execution Environment) enables network-based booting.
+
+Step 1: Create PXE Default Template
+Navigate to Hosts → Templates → Provisioning Templates
+Click Create Template
+Select PXELinux as template type
+# PXE Default Template
+DEFAULT menu
+PROMPT 0
+MENU TITLE Satellite PXE Boot Menu
+TIMEOUT 200
+
+LABEL local
+  MENU LABEL Boot from local drive
+  MENU DEFAULT
+  LOCALBOOT 0
+
+LABEL install
+  MENU LABEL Install RHEL 8
+  KERNEL boot/vmlinuz
+  APPEND initrd=boot/initrd.img inst.ks=<%= foreman_url('provision') %> inst.stage2=<%= @medium_uri %>
+
+LABEL rescue
+  MENU LABEL Rescue Mode
+  KERNEL boot/vmlinuz
+  APPEND initrd=boot/initrd.img rescue inst.stage2=<%= @medium_uri %>
+Step 2: Configure PXE Discovery
+# PXE Discovery Template
+DEFAULT menu
+PROMPT 0
+MENU TITLE Satellite Discovery
+TIMEOUT 200
+
+LABEL discovery
+  MENU LABEL Discover Host
+  MENU DEFAULT
+  KERNEL boot/fdi-image/vmlinuz0
+  APPEND initrd=boot/fdi-image/initrd0.img rootflags=loop root=live:/fdi.iso rootfstype=auto ro rd.live.image acpi=force rd.luks=0 rd.md=0 rd.dm=0 rd.lvm=0 rd.bootif=0 rd.neednet=0 nomodeset proxy.url=<%= foreman_server_url %> proxy.type=foreman
+Subtask 1.3: Configure iPXE Templates
+iPXE provides enhanced network booting capabilities.
+
+Step 1: Create iPXE Template
+# iPXE Template
+#!ipxe
+
+echo Starting iPXE boot for <%= @host.name %>
+echo MAC Address: <%= @host.mac %>
+echo IP Address: <%= @host.ip %>
+
+# Set network configuration
+dhcp
+
+# Boot kernel and initrd
+kernel <%= @kernel %> <%= pxe_kernel_options %>
+initrd <%= @initrd %>
+
+# Boot the system
+boot
+Step 2: Configure iPXE Chain Loading
+# iPXE Chain Template
+#!ipxe
+
+# Chain load based on architecture
+cpuid --ext 29 && set arch x86_64 || set arch i386
+goto ${arch}
+
+:x86_64
+chain <%= foreman_server_url %>/unattended/iPXE?mac=${net0/mac}
+goto end
+
+:i386
+chain <%= foreman_server_url %>/unattended/iPXE?mac=${net0/mac}
+goto end
+
+:end
+Task 2: Configure DHCP, DNS, and TFTP Services via Capsule Servers
+Subtask 2.1: Configure DHCP Service
+Step 1: Install and Configure DHCP on Capsule Server
+# Connect to Capsule Server
+ssh root@capsule.example.com
+
+# Install DHCP server
+dnf install -y dhcp-server
+
+# Configure DHCP
+cat > /etc/dhcp/dhcpd.conf << 'EOF'
+# DHCP Configuration for Satellite Provisioning
+default-lease-time 600;
+max-lease-time 7200;
+authoritative;
+
+# Subnet configuration
+subnet 192.168.1.0 netmask 255.255.255.0 {
+    range 192.168.1.100 192.168.1.200;
+    option routers 192.168.1.1;
+    option domain-name-servers 192.168.1.20;
+    option domain-name "example.com";
+    
+    # PXE boot configuration
+    next-server 192.168.1.20;
+    filename "pxelinux.0";
+}
+
+# Host reservations will be managed by Satellite
+include "/etc/dhcp/dhcpd.hosts";
+EOF
+
+# Create hosts file
+touch /etc/dhcp/dhcpd.hosts
+
+# Enable and start DHCP service
+systemctl enable dhcpd
+systemctl start dhcpd
+systemctl status dhcpd
+Step 2: Configure Satellite to Manage DHCP
+# On Satellite server
+satellite-installer --foreman-proxy-dhcp true \
+                   --foreman-proxy-dhcp-managed true \
+                   --foreman-proxy-dhcp-interface eth0 \
+                   --foreman-proxy-dhcp-gateway 192.168.1.1 \
+                   --foreman-proxy-dhcp-range "192.168.1.100 192.168.1.200" \
+                   --foreman-proxy-dhcp-nameservers "192.168.1.20"
+Subtask 2.2: Configure DNS Service
+Step 1: Install and Configure DNS on Capsule Server
+# Install BIND DNS server
+dnf install -y bind bind-utils
+
+# Configure named.conf
+cat > /etc/named.conf << 'EOF'
+options {
+    listen-on port 53 { 127.0.0.1; 192.168.1.20; };
+    directory "/var/named";
+    dump-file "/var/named/data/cache_dump.db";
+    statistics-file "/var/named/data/named_stats.txt";
+    memstatistics-file "/var/named/data/named_mem_stats.txt";
+    allow-query { localhost; 192.168.1.0/24; };
+    recursion yes;
+    forwarders { 8.8.8.8; 8.8.4.4; };
+};
+
+zone "example.com" IN {
+    type master;
+    file "example.com.zone";
+    allow-update { localhost; };
+};
+
+zone "1.168.192.in-addr.arpa" IN {
+    type master;
+    file "1.168.192.in-addr.arpa.zone";
+    allow-update { localhost; };
+};
+EOF
+
+# Create forward zone file
+cat > /var/named/example.com.zone << 'EOF'
+$TTL 86400
+@   IN  SOA     capsule.example.com. admin.example.com. (
+        2023010101  ; Serial
+        3600        ; Refresh
+        1800        ; Retry
+        604800      ; Expire
+        86400       ; Minimum TTL
+)
+
+@           IN  NS      capsule.example.com.
+capsule     IN  A       192.168.1.20
+satellite   IN  A       192.168.1.10
+EOF
+
+# Create reverse zone file
+cat > /var/named/1.168.192.in-addr.arpa.zone << 'EOF'
+$TTL 86400
+@   IN  SOA     capsule.example.com. admin.example.com. (
+        2023010101  ; Serial
+        3600        ; Refresh
+        1800        ; Retry
+        604800      ; Expire
+        86400       ; Minimum TTL
+)
+
+@       IN  NS      capsule.example.com.
+20      IN  PTR     capsule.example.com.
+10      IN  PTR     satellite.example.com.
+EOF
+
+# Set proper permissions
+chown named:named /var/named/*.zone
+chmod 644 /var/named/*.zone
+
+# Enable and start DNS service
+systemctl enable named
+systemctl start named
+systemctl status named
+Step 2: Configure Satellite to Manage DNS
+# Configure DNS integration
+satellite-installer --foreman-proxy-dns true \
+                   --foreman-proxy-dns-managed true \
+                   --foreman-proxy-dns-interface eth0 \
+                   --foreman-proxy-dns-zone example.com \
+                   --foreman-proxy-dns-reverse 1.168.192.in-addr.arpa
+Subtask 2.3: Configure TFTP Service
+Step 1: Install and Configure TFTP
+# Install TFTP server
+dnf install -y tftp-server xinetd
+
+# Configure TFTP
+cat > /etc/xinetd.d/tftp << 'EOF'
+service tftp
+{
+    socket_type     = dgram
+    protocol        = udp
+    wait            = yes
+    user            = root
+    server          = /usr/sbin/in.tftpd
+    server_args     = -s /var/lib/tftpboot
+    disable         = no
+    per_source      = 11
+    cps             = 100 2
+    flags           = IPv4
+}
+EOF
+
+# Create TFTP directory structure
+mkdir -p /var/lib/tftpboot/{boot,pxelinux.cfg}
+
+# Download PXE boot files
+dnf install -y syslinux-tftpboot
+cp /tftpboot/pxelinux.0 /var/lib/tftpboot/
+cp /tftpboot/menu.c32 /var/lib/tftpboot/
+cp /tftpboot/chain.c32 /var/lib/tftpboot/
+
+# Set permissions
+chmod -R 755 /var/lib/tftpboot
+chown -R nobody:nobody /var/lib/tftpboot
+
+# Enable and start services
+systemctl enable xinetd
+systemctl start xinetd
+systemctl status xinetd
+Step 2: Configure Satellite TFTP Integration
+# Configure TFTP integration
+satellite-installer --foreman-proxy-tftp true \
+                   --foreman-proxy-tftp-managed true \
+                   --foreman-proxy-tftp-servername 192.168.1.20
+Task 3: Provision a Host Using Satellite and Monitor Progress
+Subtask 3.1: Prepare for Host Provisioning
+Step 1: Create Host Group
+Navigate to Configure → Host Groups
+Click Create Host Group
+Configure the following:
+Name: RHEL8-Production
+Environment: production
+Puppet CA Proxy: capsule.example.com
+Puppet Proxy: capsule.example.com
+Operating System: RedHat 8.x
+Architecture: x86_64
+Medium: RHEL8 BaseOS
+Partition Table: Kickstart default
+PXE Loader: PXELinux BIOS
+Step 2: Configure Compute Resource (for Virtual Machines)
+# For libvirt/KVM compute resource
+# Navigate to Infrastructure → Compute Resources
+# Click Create Compute Resource
+
+Name: Local-KVM
+Provider: Libvirt
+URL: qemu+ssh://root@hypervisor.example.com/system
+Subtask 3.2: Provision Bare-Metal Host
+Step 1: Create New Host Entry
+Navigate to Hosts → Create Host
+Fill in the host details:
+Name: server01.example.com
+Host Group: RHEL8-Production
+Deploy on: Bare Metal
+MAC Address: 52:54:00:12:34:56
+IP Address: 192.168.1.150
+Step 2: Configure Network Boot
+# Verify PXE configuration
+cat > /var/lib/tftpboot/pxelinux.cfg/01-52-54-00-12-34-56 << 'EOF'
+DEFAULT linux
+LABEL linux
+    KERNEL boot/vmlinuz
+    APPEND initrd=boot/initrd.img inst.ks=http://satellite.example.com/unattended/provision inst.stage2=http://satellite.example.com/pulp/repos/Example_Organization/Library/content/dist/rhel8/8/x86_64/baseos/os/
+EOF
+Step 3: Monitor Provisioning Progress
+# Monitor DHCP leases
+tail -f /var/log/dhcpd.log
+
+# Monitor TFTP requests
+tail -f /var/log/messages | grep tftp
+
+# Monitor Satellite logs
+tail -f /var/log/foreman/production.log
+Subtask 3.3: Provision Virtual Machine
+Step 1: Create VM Host Entry
+Navigate to Hosts → Create Host
+Configure virtual machine settings:
+Name: vm01.example.com
+Host Group: RHEL8-Production
+Deploy on: Local-KVM
+CPUs: 2
+Memory: 2048 MB
+Storage: 20 GB
+Network: default
+Step 2: Start VM Provisioning
+# Monitor VM creation
+virsh list --all
+
+# Check VM console
+virsh console vm01.example.com
+Subtask 3.4: Provision Cloud Instance
+Step 1: Configure Cloud Compute Resource
+# For AWS EC2 (example configuration)
+# Navigate to Infrastructure → Compute Resources
+# Click Create Compute Resource
+
+Name: AWS-East
+Provider: EC2
+Access Key: [your-access-key]
+Secret Key: [your-secret-key]
+Region: us-east-1
+Step 2: Create Cloud Instance
+Name: cloud01.example.com
+Host Group: RHEL8-Production
+Deploy on: AWS-East
+Instance Type: t3.micro
+Image: ami-xxxxxxxxx (RHEL 8 AMI)
+Security Groups: default
+Key Pair: satellite-key
+Subtask 3.5: Monitor and Troubleshoot Provisioning
+Step 1: Real-time Monitoring
+# Monitor provisioning status in Satellite
+# Navigate to Monitor → Tasks
+
+# Check host build status
+hammer host list --search "build = true"
+
+# Monitor system logs
+journalctl -f -u foreman
+journalctl -f -u foreman-proxy
+Step 2: Troubleshooting Common Issues
+# Check DHCP service
+systemctl status dhcpd
+dhcp-lease-list
+
+# Verify DNS resolution
+nslookup server01.example.com
+dig @192.168.1.20 server01.example.com
+
+# Test TFTP connectivity
+tftp 192.168.1.20
+get pxelinux.0
+
+# Check firewall rules
+firewall-cmd --list-all
+Step 3: Verify Successful Provisioning
+# Check host registration
+hammer host list
+
+# Verify host facts
+hammer host facts --name server01.example.com
+
+# Test SSH connectivity
+ssh root@server01.example.com
+
+# Verify Satellite agent
+subscription-manager status
+katello-agent status
+Advanced Configuration
+Custom Provisioning Workflow
+# Create custom provisioning callback
+cat > /usr/share/foreman/config/hooks/host/managed/create/01_custom_provisioning.rb << 'EOF'
+# Custom provisioning hook
+if @object.build?
+  logger.info "Starting custom provisioning for #{@object.name}"
+  
+  # Custom logic here
+  # Send notifications, update external systems, etc.
+  
+  logger.info "Custom provisioning completed for #{@object.name}"
+end
+EOF
+Automated Testing
+# Create provisioning test script
+cat > /root/test_provisioning.sh << 'EOF'
+#!/bin/bash
+
+# Test provisioning workflow
+echo "Testing Satellite provisioning..."
+
+# Test DHCP
+echo "Testing DHCP..."
+dhcping -s 192.168.1.20
+
+# Test DNS
+echo "Testing DNS..."
+nslookup satellite.example.com 192.168.1.20
+
+# Test TFTP
+echo "Testing TFTP..."
+curl -I tftp://192.168.1.20/pxelinux.0
+
+echo "Provisioning tests completed."
+EOF
+
+chmod +x /root/test_provisioning.sh
+Troubleshooting Guide
+Common Issues and Solutions
+Issue 1: PXE Boot Fails
+# Check DHCP configuration
+systemctl status dhcpd
+tail -f /var/log/dhcpd.log
+
+# Verify TFTP service
+systemctl status xinetd
+netstat -ulnp | grep :69
+
+# Check PXE files
+ls -la /var/lib/tftpboot/
+Issue 2: Kickstart Download Fails
+# Verify HTTP service
+systemctl status httpd
+curl -I http://satellite.example.com/unattended/provision
+
+# Check template rendering
+hammer template dump --name "Custom RHEL Kickstart"
+Issue 3: Host Registration Fails
+# Check Satellite connectivity
+curl -k https://satellite.example.com/api/status
+
+# Verify certificates
+katello-certs-check -c /etc/pki/katello/certs/katello-apache.crt \
+                   -k /etc/pki/katello/private/katello-apache.key \
+                   -b /etc/pki/katello-certs-tools/certs/katello-server-ca.crt
+Performance Optimization
+Scaling Provisioning Operations
+# Optimize Satellite performance
+satellite-installer --tuning development
+
+# Configure concurrent provisioning
+echo "FOREMAN_PROVISIONING_WORKERS=4" >> /etc/foreman/settings.yaml
+
+# Monitor resource usage
+top -p $(pgrep -f foreman)
+iostat -x 1
+Security Considerations
+Securing Provisioning Environment
+# Configure SSL/TLS for provisioning
+satellite-installer --certs-server-cert /path/to/server.crt \
+                   --certs-server-key /path/to/server.key \
+                   --certs-server-ca-cert /path/to/ca.crt
+
+# Implement network segmentation
+firewall-cmd --new-zone=provisioning
+firewall-cmd --zone=provisioning --add-source=192.168.1.0/24
+firewall-cmd --zone=provisioning --add-service=dhcp
+firewall-cmd --zone=provisioning --add-service=dns
+firewall-cmd --zone=provisioning --add-service=tftp
+Conclusion
+In this comprehensive lab, you have successfully:
+
+Configured Provisioning Templates: Set up Kickstart, PXE, and iPXE templates for automated host installation
+Implemented Network Services: Configured DHCP, DNS, and TFTP services through Capsule Servers for network-based provisioning
+Provisioned Multiple Host Types: Successfully deployed bare-metal servers, virtual machines, and cloud instances using Satellite
+Monitored Provisioning Processes: Learned to track and troubleshoot provisioning operations in real-time
+Implemented Best Practices: Applied security measures and performance optimizations for production environments
+Key Achievements
+Automation Mastery: You can now automate the complete host lifecycle from initial deployment to configuration management
+Multi-Platform Deployment: Gained experience provisioning across different infrastructure types (bare-metal, virtual, cloud)
+Network Service Integration: Successfully integrated essential network services for seamless provisioning operations
+Troubleshooting Skills: Developed practical skills for diagnosing and resolving common provisioning issues
+Real-World Applications
+This lab prepares you for:
+
+Enterprise Infrastructure Management: Managing large-scale server deployments in production environments
+DevOps Integration: Implementing infrastructure-as-code practices with automated provisioning
+Disaster Recovery: Rapidly rebuilding infrastructure components using standardized templates
+Compliance Management: Ensuring consistent system configurations across your infrastructure
+Next Steps
+To further enhance your skills:
+
+Explore advanced provisioning scenarios with custom scripts and hooks
+Integrate provisioning workflows with configuration management tools
+Implement automated testing and validation of provisioned systems
+Study integration with container platforms and cloud-native technologies
+The knowledge gained from this lab directly supports the Red Hat Certified Specialist in Deployment and Systems Management certification and provides practical skills essential for modern infrastructure management roles.
