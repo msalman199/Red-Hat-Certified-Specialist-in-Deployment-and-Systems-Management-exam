@@ -1,0 +1,361 @@
+Lab 4: Content Views and Lifecycle Environments
+Objectives
+By the end of this lab, you will be able to:
+
+Create and manage content views in Red Hat Satellite
+Configure lifecycle environments for content promotion
+Promote content through development, testing, and production environments
+Understand the relationship between content views and lifecycle environments
+Implement content management best practices for enterprise environments
+Prerequisites
+Before starting this lab, you should have:
+
+Basic understanding of Red Hat Satellite architecture
+Familiarity with Linux command line operations
+Knowledge of package management concepts
+Completion of previous Satellite labs (repositories and synchronization)
+Administrative access to a Red Hat Satellite server
+Lab Environment Setup
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines with Red Hat Satellite already installed. Simply click Start Lab to access your environment - no need to build your own VM or install software.
+
+Your lab environment includes:
+
+Red Hat Satellite 6.x server (satellite.example.com)
+Pre-configured repositories and products
+Administrative user credentials
+Network connectivity between all systems
+Task 1: Understanding Content Views and Lifecycle Environments
+Subtask 1.1: Review Current Environment
+First, let's examine the existing content structure in your Satellite server.
+
+Access the Satellite Web UI:
+
+# Open your web browser and navigate to:
+https://satellite.example.com
+
+# Login credentials:
+Username: admin
+Password: redhat123
+Navigate to Content Management:
+
+Click on Content in the main menu
+Select Content Views from the dropdown
+Observe any existing content views
+Check Lifecycle Environments:
+
+Click on Content → Lifecycle Environments
+Note the default Library environment
+Examine the environment path structure
+Subtask 1.2: Understand the Concept
+Content Views are filtered sets of content that define what packages, errata, and puppet modules are available to systems. They act as snapshots of content at specific points in time.
+
+Lifecycle Environments represent different stages in your content promotion workflow (Development → Testing → Production).
+
+Task 2: Create and Manage Content Views
+Subtask 2.1: Create a Base Content View
+Create a new Content View:
+
+Navigate to Content → Content Views
+Click Create New View
+Fill in the details:
+Name: RHEL8-BaseOS-CV
+Label: rhel8_baseos_cv
+Description: Base RHEL 8 content view for core packages
+Click Save
+Add Repositories to Content View:
+
+In the newly created content view, click on the Repositories tab
+Click Add and select repositories:
+Red Hat Enterprise Linux 8 for x86_64 - BaseOS (RPMs)
+Red Hat Enterprise Linux 8 for x86_64 - AppStream (RPMs)
+Click Add Repositories
+Publish the Content View:
+
+Click on the Versions tab
+Click Publish New Version
+Add description: "Initial version with RHEL 8 BaseOS and AppStream"
+Click Save
+Subtask 2.2: Create a Composite Content View
+Create Composite Content View:
+
+Navigate to Content → Content Views
+Click Create New View
+Check Composite View checkbox
+Fill in details:
+Name: RHEL8-Complete-CCV
+Label: rhel8_complete_ccv
+Description: Complete RHEL 8 environment with all components
+Click Save
+Add Content Views to Composite:
+
+In the Content Views tab of the composite view
+Click Add Content Views
+Select the previously created RHEL8-BaseOS-CV
+Choose the latest version
+Click Add Content Views
+Publish Composite Content View:
+
+Go to Versions tab
+Click Publish New Version
+Add description: "Initial composite version"
+Click Save
+Subtask 2.3: Content View Filtering
+Create Content Filter:
+
+Open your RHEL8-BaseOS-CV content view
+Click on Filters tab
+Click New Filter
+Configure filter:
+Name: Security-Updates-Only
+Type: Package
+Inclusion Type: Include
+Description: Include only security-related packages
+Click Save
+Configure Filter Rules:
+
+Click on the newly created filter
+Click Add Rule
+Set rule parameters:
+Package Name: kernel*
+Architecture: x86_64
+Click Save
+Task 3: Configure Lifecycle Environments
+Subtask 3.1: Create Development Environment
+Create Development Environment:
+Navigate to Content → Lifecycle Environments
+Click Create Environment Path
+Configure the environment:
+Name: Development
+Label: development
+Description: Development environment for testing new content
+Prior Environment: Library
+Click Save
+Subtask 3.2: Create Testing Environment
+Create Testing Environment:
+Click Create Environment Path again
+Configure:
+Name: Testing
+Label: testing
+Description: Testing environment for validation
+Prior Environment: Development
+Click Save
+Subtask 3.3: Create Production Environment
+Create Production Environment:
+
+Click Create Environment Path
+Configure:
+Name: Production
+Label: production
+Description: Production environment for live systems
+Prior Environment: Testing
+Click Save
+Verify Environment Path: Your lifecycle path should now show:
+
+Library → Development → Testing → Production
+Task 4: Promote Content Through Environments
+Subtask 4.1: Promote to Development
+Promote Content View to Development:
+
+Navigate to Content → Content Views
+Select your RHEL8-BaseOS-CV
+Click on Versions tab
+Find the published version and click Promote
+Select Development environment
+Add description: "Promoting to development for initial testing"
+Click Promote Version
+Monitor Promotion Task:
+
+Navigate to Monitor → Tasks
+Watch the promotion task complete
+Verify successful completion
+Subtask 4.2: Promote to Testing
+Promote to Testing Environment:
+Return to your content view versions
+Click Promote on the same version
+Select Testing environment
+Add description: "Promoting to testing after development validation"
+Click Promote Version
+Subtask 4.3: Promote to Production
+Promote to Production Environment:
+
+Click Promote again on the same version
+Select Production environment
+Add description: "Promoting to production after successful testing"
+Click Promote Version
+Verify Promotion Status:
+
+Check that your content view version is now available in all environments
+Navigate to Content → Lifecycle Environments
+Click on each environment to verify content availability
+Task 5: Advanced Content View Management
+Subtask 5.1: Create Content View with CLI
+You can also manage content views using the command line interface:
+
+Access Satellite CLI:
+
+# SSH to your Satellite server
+ssh root@satellite.example.com
+
+# List existing content views
+hammer content-view list --organization "Default Organization"
+Create Content View via CLI:
+
+# Create a new content view
+hammer content-view create \
+  --name "RHEL8-Security-CV" \
+  --description "RHEL 8 Security Updates Only" \
+  --organization "Default Organization"
+
+# Add repository to content view
+hammer content-view add-repository \
+  --name "RHEL8-Security-CV" \
+  --organization "Default Organization" \
+  --repository "Red Hat Enterprise Linux 8 for x86_64 - BaseOS RPMs 8"
+Publish Content View:
+
+# Publish the content view
+hammer content-view publish \
+  --name "RHEL8-Security-CV" \
+  --organization "Default Organization" \
+  --description "Initial security-focused version"
+Subtask 5.2: Automate Content Promotion
+Create Promotion Script:
+
+# Create automation script
+cat > /root/promote_content.sh << 'EOF'
+#!/bin/bash
+
+# Variables
+ORG="Default Organization"
+CV_NAME="RHEL8-BaseOS-CV"
+
+# Get latest version
+LATEST_VERSION=$(hammer content-view version list \
+  --content-view "$CV_NAME" \
+  --organization "$ORG" \
+  --fields "Version" | tail -n 1 | awk '{print $1}')
+
+# Promote through environments
+for ENV in "Development" "Testing" "Production"; do
+  echo "Promoting $CV_NAME version $LATEST_VERSION to $ENV"
+  hammer content-view version promote \
+    --content-view "$CV_NAME" \
+    --organization "$ORG" \
+    --to-lifecycle-environment "$ENV" \
+    --version "$LATEST_VERSION"
+done
+EOF
+
+# Make script executable
+chmod +x /root/promote_content.sh
+Test Automation Script:
+
+# Run the promotion script
+/root/promote_content.sh
+Task 6: Content View Maintenance and Best Practices
+Subtask 6.1: Content View Cleanup
+Remove Old Versions:
+
+# List content view versions
+hammer content-view version list \
+  --content-view "RHEL8-BaseOS-CV" \
+  --organization "Default Organization"
+
+# Delete old versions (keep last 3)
+hammer content-view version delete \
+  --content-view "RHEL8-BaseOS-CV" \
+  --organization "Default Organization" \
+  --version "1.0"
+Content View Information:
+
+# Get detailed content view information
+hammer content-view info \
+  --name "RHEL8-BaseOS-CV" \
+  --organization "Default Organization"
+Subtask 6.2: Monitoring and Reporting
+Generate Content Reports:
+# List packages in content view
+hammer package list \
+  --content-view "RHEL8-BaseOS-CV" \
+  --lifecycle-environment "Production" \
+  --organization "Default Organization"
+
+# Check errata in content view
+hammer erratum list \
+  --content-view "RHEL8-BaseOS-CV" \
+  --lifecycle-environment "Production" \
+  --organization "Default Organization"
+Troubleshooting Common Issues
+Issue 1: Content View Promotion Fails
+Problem: Promotion task fails with dependency errors
+
+Solution:
+
+# Check task details
+hammer task list --search "label = Actions::Katello::ContentView::Promote"
+
+# Verify repository synchronization
+hammer repository list --organization "Default Organization"
+
+# Re-synchronize if needed
+hammer repository synchronize --name "repository-name" --organization "Default Organization"
+Issue 2: Content Not Available in Environment
+Problem: Content view shows as promoted but packages not available
+
+Solution:
+
+Verify content view version in environment
+Check activation key associations
+Regenerate repository metadata:
+hammer content-view version republish-repositories \
+  --content-view "RHEL8-BaseOS-CV" \
+  --version "1.0" \
+  --organization "Default Organization"
+Issue 3: Composite Content View Issues
+Problem: Composite content view fails to publish
+
+Solution:
+
+Ensure all component content views are published
+Check for conflicting content
+Verify component content view versions are promoted to required environments
+Verification and Testing
+Verify Content View Configuration
+Check Content View Status:
+
+# Verify all content views
+hammer content-view list --organization "Default Organization"
+
+# Check specific content view details
+hammer content-view info --name "RHEL8-BaseOS-CV" --organization "Default Organization"
+Verify Environment Promotion:
+
+# Check content view versions in environments
+hammer content-view version list \
+  --content-view "RHEL8-BaseOS-CV" \
+  --organization "Default Organization"
+Test Package Availability:
+
+# List packages in production environment
+hammer package list \
+  --content-view "RHEL8-BaseOS-CV" \
+  --lifecycle-environment "Production" \
+  --organization "Default Organization" | head -10
+Conclusion
+In this lab, you have successfully:
+
+Created and managed content views that provide controlled, versioned snapshots of your content repositories
+Configured lifecycle environments representing your development workflow stages (Development → Testing → Production)
+Promoted content through multiple environments using both web UI and command-line tools
+Implemented content filtering to control what packages are included in content views
+Created composite content views that combine multiple content views into unified deployments
+Automated content promotion using shell scripts and Hammer CLI commands
+Applied best practices for content view maintenance and cleanup
+Why This Matters: Content views and lifecycle environments are fundamental to enterprise content management. They provide:
+
+Version Control: Track and manage different versions of your content
+Environment Isolation: Separate development, testing, and production content
+Controlled Promotion: Systematic progression of content through environments
+Rollback Capability: Ability to revert to previous content versions
+Compliance: Maintain consistent, auditable content across your infrastructure
+These skills are essential for the Red Hat Certified Specialist in Deployment and Systems Management exam and for managing enterprise Red Hat environments effectively. The content view and lifecycle environment concepts ensure that your systems receive tested, approved content while maintaining the flexibility to handle different deployment scenarios.
