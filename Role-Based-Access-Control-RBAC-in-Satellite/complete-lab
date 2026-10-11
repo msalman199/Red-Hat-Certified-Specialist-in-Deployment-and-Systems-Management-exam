@@ -1,0 +1,474 @@
+Lab 15: Role-Based Access Control (RBAC) in Satellite
+Objectives
+By the end of this lab, students will be able to:
+
+Understand the fundamentals of Role-Based Access Control (RBAC) in Red Hat Satellite
+Create and configure custom roles with specific permissions
+Assign users to organizations and locations with appropriate access levels
+Implement granular permission controls for different user types
+Test and validate RBAC policies to ensure proper access restrictions
+Troubleshoot common RBAC configuration issues
+Prerequisites
+Before starting this lab, students should have:
+
+Basic understanding of Linux system administration
+Familiarity with Red Hat Satellite concepts (organizations, locations, content views)
+Knowledge of user and group management in Linux
+Understanding of web-based administration interfaces
+Completed previous Satellite labs covering basic setup and configuration
+Lab Environment
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines with Red Hat Satellite already installed. Simply click Start Lab to access your environment - no need to build your own VM or install software.
+
+Your lab environment includes:
+
+Red Hat Enterprise Linux 8 server with Satellite 6.x installed
+Pre-configured Satellite server with sample organizations and locations
+Multiple test user accounts for RBAC testing
+Web browser access to Satellite web interface
+Task 1: Understanding Satellite RBAC Components
+Subtask 1.1: Explore Default Roles and Permissions
+First, let's examine the existing RBAC structure in Satellite.
+
+Access the Satellite Web Interface
+
+# Open your web browser and navigate to:
+https://satellite.example.com
+
+# Login with admin credentials:
+Username: admin
+Password: redhat123
+Navigate to User Management
+
+Click on Administer in the top menu
+Select Users from the dropdown menu
+Click on Roles tab to view existing roles
+Examine Default Roles
+
+Review these key default roles:
+
+Site Manager: Full administrative access
+Manager: Organization-level management
+Viewer: Read-only access to resources
+Compliance viewer: Access to compliance reports
+Discovery Manager: Manage host discovery
+Analyze Role Permissions
+
+Click on each role to examine their permissions:
+
+# Document the permissions for each default role
+# Note the resource types and permission levels
+Subtask 1.2: Review Organizations and Locations Structure
+Check Existing Organizations
+
+Navigate to Administer > Organizations
+Note the existing organizations (Default Organization, ACME Corp, etc.)
+Review Location Hierarchy
+
+Navigate to Administer > Locations
+Examine the location structure (Default Location, New York, London, etc.)
+Understand Context Relationships
+
+# Organizations and locations provide context for RBAC
+# Users can have different roles in different contexts
+Task 2: Creating Custom Roles and Managing Permissions
+Subtask 2.1: Create a Content Manager Role
+Create New Role
+
+Navigate to Administer > Users > Roles
+Click Create Role
+Enter the following details:
+Name: Content Manager
+Description: Manages content views and repositories
+Assign Specific Permissions
+
+Add these permissions to the Content Manager role:
+
+# Content View permissions
+- view_content_views
+- create_content_views
+- edit_content_views
+- destroy_content_views
+- publish_content_views
+- promote_or_remove_content_views
+
+# Repository permissions
+- view_products
+- create_products
+- edit_products
+- destroy_products
+- sync_products
+Configure Resource Filters
+
+Click Add Filter for each permission type
+Set Unlimited for global access or specify organizations/locations
+Save the role configuration
+Subtask 2.2: Create a Host Administrator Role
+Create Host Admin Role
+
+# Role details:
+Name: Host Administrator
+Description: Manages host lifecycle and configuration
+Assign Host Management Permissions
+
+# Host permissions
+- view_hosts
+- create_hosts
+- edit_hosts
+- destroy_hosts
+- build_hosts
+- power_hosts
+- console_hosts
+
+# Host group permissions
+- view_hostgroups
+- create_hostgroups
+- edit_hostgroups
+- destroy_hostgroups
+Add Provisioning Permissions
+
+# Operating system permissions
+- view_operatingsystems
+- view_architectures
+- view_media
+- view_ptables
+
+# Template permissions
+- view_provisioning_templates
+- view_job_templates
+Subtask 2.3: Create a Compliance Auditor Role
+Create Auditor Role
+
+Name: Compliance Auditor
+Description: Reviews compliance reports and policies
+Assign Read-Only Compliance Permissions
+
+# Compliance permissions
+- view_compliance_reports
+- view_policies
+- view_arf_reports
+- download_bootdisk
+
+# Host viewing permissions
+- view_hosts
+- view_hostgroups
+Task 3: User Management and Role Assignment
+Subtask 3.1: Create Test Users
+Create Content Manager User
+
+Navigate to Administer > Users
+Click Create User
+Fill in user details:
+Login: contentmgr
+First name: Content
+Last name: Manager
+Email: contentmgr@example.com
+Password: TempPass123!
+Create Host Administrator User
+
+Login: hostadmin
+First name: Host
+Last name: Administrator
+Email: hostadmin@example.com
+Password: TempPass123!
+Create Compliance Auditor User
+
+Login: auditor
+First name: Compliance
+Last name: Auditor
+Email: auditor@example.com
+Password: TempPass123!
+Subtask 3.2: Assign Roles to Users
+Assign Content Manager Role
+
+Edit the contentmgr user
+Go to Roles tab
+Add Content Manager role
+Set context to ACME Corp organization
+Save changes
+Assign Host Administrator Role
+
+Edit the hostadmin user
+Add Host Administrator role
+Set context to New York location within ACME Corp
+Save changes
+Assign Compliance Auditor Role
+
+Edit the auditor user
+Add Compliance Auditor role
+Set context to All Organizations and All Locations
+Save changes
+Subtask 3.3: Configure Multi-Context Access
+Create Multi-Role User
+
+Login: multiuser
+First name: Multi
+Last name: Role
+Email: multiuser@example.com
+Password: TempPass123!
+Assign Multiple Roles with Different Contexts
+
+Add Viewer role for Default Organization
+Add Host Administrator role for ACME Corp > London
+Add Content Manager role for ACME Corp > New York
+Task 4: Implementing Organization and Location-Based Permissions
+Subtask 4.1: Configure Organization-Specific Access
+Create Department-Specific Roles
+
+Create Development Team role:
+
+Name: Development Team
+Description: Access to development resources only
+
+Permissions:
+- view_hosts (filtered to Development hostgroup)
+- view_content_views (filtered to Dev content views)
+- view_activation_keys (filtered to dev keys)
+Create Production Team Role
+
+Name: Production Team
+Description: Limited production environment access
+
+Permissions:
+- view_hosts (filtered to Production hostgroup)
+- view_content_views (read-only production views)
+- view_compliance_reports (production hosts only)
+Subtask 4.2: Implement Location-Based Restrictions
+Configure Geographic Access Control
+
+Create Regional Manager role:
+
+Name: Regional Manager
+Description: Manages resources in specific geographic region
+
+Permissions:
+- view_hosts (unlimited)
+- edit_hosts (unlimited)
+- view_content_views (unlimited)
+- Location filter: New York only
+Test Location Filtering
+
+Create test user with Regional Manager role
+Verify access is restricted to New York location resources
+Confirm user cannot see London or other location resources
+Subtask 4.3: Create Hierarchical Permission Structure
+Implement Delegation Model
+
+# Create hierarchy:
+# Global Admin -> Regional Manager -> Local Operator
+
+# Local Operator role
+Name: Local Operator
+Description: Basic operations in assigned location
+
+Permissions:
+- view_hosts (location-filtered)
+- power_hosts (location-filtered)
+- view_reports (location-filtered)
+Configure Permission Inheritance
+
+Ensure higher-level roles can delegate permissions
+Test that Regional Managers can assign Local Operator roles
+Verify permission boundaries are maintained
+Task 5: Testing and Validating RBAC Policies
+Subtask 5.1: Test Content Manager Permissions
+Login as Content Manager
+
+# Use contentmgr credentials to login
+Username: contentmgr
+Password: TempPass123!
+Verify Content Management Access
+
+Navigate to Content > Content Views
+Attempt to create a new content view
+Try to publish an existing content view
+Verify access to repositories and products
+Test Access Restrictions
+
+Attempt to access Hosts > All Hosts (should be denied)
+Try to modify user accounts (should be denied)
+Verify organization context restrictions
+Subtask 5.2: Test Host Administrator Permissions
+Login as Host Administrator
+
+Username: hostadmin
+Password: TempPass123!
+Verify Host Management Capabilities
+
+Navigate to Hosts > All Hosts
+Create a new host entry
+Modify existing host parameters
+Test host power management functions
+Test Location Restrictions
+
+Verify access only to New York location hosts
+Attempt to access London hosts (should be denied)
+Check hostgroup management permissions
+Subtask 5.3: Test Compliance Auditor Access
+Login as Compliance Auditor
+
+Username: auditor
+Password: TempPass123!
+Verify Read-Only Compliance Access
+
+Navigate to Hosts > Compliance > Reports
+View compliance policies and results
+Attempt to modify policies (should be denied)
+Download compliance reports
+Test Cross-Organization Access
+
+Verify access to compliance data across all organizations
+Check that modification permissions are properly restricted
+Subtask 5.4: Validate Multi-Context User Access
+Login as Multi-Role User
+
+Username: multiuser
+Password: TempPass123!
+Test Context Switching
+
+Switch between different organization contexts
+Verify different permission sets in each context
+Test location-based access variations
+Validate Permission Boundaries
+
+Ensure permissions don't bleed between contexts
+Verify proper role separation
+Test that users can only perform authorized actions
+Task 6: Advanced RBAC Configuration and Troubleshooting
+Subtask 6.1: Configure Custom Resource Filters
+Create Hostgroup-Based Filters
+
+# Create filter for Development hostgroup only
+Filter Type: Hostgroup
+Search: name ~ "Development*"
+Implement Content View Filters
+
+# Filter for specific content view patterns
+Filter Type: Content View
+Search: name ~ "RHEL*-Dev"
+Test Filter Effectiveness
+
+Verify users only see filtered resources
+Test search functionality with filters applied
+Confirm filter inheritance in role assignments
+Subtask 6.2: Troubleshoot Common RBAC Issues
+Debug Permission Conflicts
+
+# Check user effective permissions
+# Navigate to user profile > Roles tab
+# Review all assigned roles and their contexts
+Resolve Access Denied Issues
+
+# Common troubleshooting steps:
+# 1. Verify user has required role
+# 2. Check organization/location context
+# 3. Confirm resource filters are correct
+# 4. Review permission inheritance
+Audit Permission Changes
+
+Navigate to Monitor > Audits
+Filter for user and role-related changes
+Review permission modification history
+Subtask 6.3: Implement RBAC Best Practices
+Apply Principle of Least Privilege
+
+# Review all roles for excessive permissions
+# Remove unnecessary access rights
+# Implement time-based access where appropriate
+Document Role Definitions
+
+# Create role documentation including:
+# - Purpose and scope
+# - Assigned permissions
+# - Context restrictions
+# - Approval workflow
+Regular RBAC Auditing
+
+# Implement periodic review process:
+# - Quarterly role assignments review
+# - Annual permission audit
+# - User access certification
+Verification and Testing Commands
+Command-Line RBAC Verification
+Check User Roles via CLI
+
+# List all users and their roles
+hammer user list --fields "Login,Roles"
+
+# Get detailed user information
+hammer user info --login contentmgr
+Verify Role Permissions
+
+# List role details
+hammer role list
+hammer role info --name "Content Manager"
+
+# Check role filters
+hammer filter list --role "Content Manager"
+Test API Access with Different Users
+
+# Test API access as content manager
+curl -u contentmgr:TempPass123! \
+     -H "Accept: application/json" \
+     https://satellite.example.com/api/v2/content_views
+
+# Test restricted access (should fail)
+curl -u contentmgr:TempPass123! \
+     -H "Accept: application/json" \
+     https://satellite.example.com/api/v2/users
+Common Troubleshooting Issues
+Issue 1: User Cannot Access Expected Resources
+Symptoms: User receives "Access Denied" errors for resources they should access
+
+Solution:
+
+# Check user role assignments
+hammer user info --login username
+
+# Verify organization/location context
+# Ensure user is assigned to correct org/location
+
+# Check role permissions
+hammer role info --name "Role Name"
+Issue 2: Permissions Not Working as Expected
+Symptoms: User has more or less access than intended
+
+Solution:
+
+# Review all assigned roles
+# Check for conflicting permissions
+# Verify filter configurations
+# Test in different contexts
+Issue 3: Role Assignment Fails
+Symptoms: Cannot assign role to user or organization
+
+Solution:
+
+# Verify role exists and is active
+# Check organization/location assignments
+# Ensure proper administrative permissions
+# Review audit logs for errors
+Conclusion
+In this comprehensive lab, you have successfully implemented and tested Role-Based Access Control (RBAC) in Red Hat Satellite. You accomplished the following key objectives:
+
+What You Learned:
+
+Created custom roles with specific permission sets tailored to different job functions
+Implemented organization and location-based access controls for geographic and departmental separation
+Configured granular resource filters to limit access to specific hosts, content views, and other resources
+Tested RBAC policies thoroughly to ensure proper access restrictions and functionality
+Troubleshot common RBAC issues and implemented best practices for ongoing management
+Why This Matters: RBAC is crucial for enterprise environments because it:
+
+Enhances Security: Limits access to only necessary resources, reducing security risks
+Improves Compliance: Helps meet regulatory requirements for access control and auditing
+Increases Efficiency: Users can focus on their specific responsibilities without unnecessary complexity
+Enables Delegation: Allows distributed administration while maintaining security boundaries
+Supports Scalability: Provides a framework for managing access as organizations grow
+Real-World Applications: The RBAC skills you've developed are essential for:
+
+Managing large-scale Red Hat Satellite deployments in enterprise environments
+Implementing security policies that align with organizational structure
+Supporting compliance initiatives and audit requirements
+Enabling self-service capabilities while maintaining control
+Preparing for the Red Hat Certified Specialist in Deployment and Systems Management exam
+You now have the practical experience to design, implement, and maintain sophisticated RBAC policies that balance security, usability, and operational efficiency in production Satellite environments.
