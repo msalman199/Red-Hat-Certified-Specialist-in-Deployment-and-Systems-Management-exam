@@ -1,0 +1,355 @@
+Lab 12: Errata Management and Patching
+Objectives
+By the end of this lab, students will be able to:
+
+Understand different types of errata (security, bugfix, and enhancement updates)
+Identify and analyze available errata using Red Hat Satellite or Foreman/Katello
+Apply patches and updates to individual systems and groups of hosts
+Schedule automated patch management jobs
+Use host collections to manage updates across multiple systems
+Verify successful patch deployment and system compliance
+Implement best practices for enterprise patch management
+Prerequisites
+Before starting this lab, students should have:
+
+Basic understanding of Linux system administration
+Familiarity with Red Hat Enterprise Linux or CentOS/Rocky Linux
+Knowledge of package management using yum/dnf
+Understanding of system repositories and package sources
+Basic command-line navigation skills
+Completed previous labs on content management and host registration
+Lab Environment
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines for this lab. Simply click Start Lab to access your environment - no need to build your own virtual machines.
+
+Your lab environment includes:
+
+Satellite Server: Foreman/Katello management server
+Client Systems: Multiple RHEL/CentOS hosts for patch testing
+Network Configuration: Pre-configured with proper connectivity
+Task 1: Identify Errata in Satellite
+Subtask 1.1: Access the Satellite Web Interface
+Connect to your Satellite server:
+
+# SSH to your Satellite server (provided in lab environment)
+ssh root@satellite.example.com
+Verify Satellite services are running:
+
+# Check Satellite status
+satellite-maintain service status
+
+# If services are not running, start them
+satellite-maintain service start
+Access the web interface:
+
+Open your web browser
+Navigate to https://satellite.example.com
+Login with provided credentials (typically admin/password)
+Subtask 1.2: Navigate to Errata Management
+Access the Errata section:
+
+In the Satellite web interface, click on Content in the main menu
+Select Errata from the dropdown menu
+Understand errata types:
+
+Security Errata: Critical security patches (marked with shield icon)
+Bugfix Errata: Bug fixes and stability improvements
+Enhancement Errata: New features and enhancements
+Subtask 1.3: Filter and Analyze Available Errata
+Filter errata by type:
+
+# Command-line method to list errata
+hammer erratum list --organization "Default Organization"
+
+# Filter by security errata only
+hammer erratum list --organization "Default Organization" --errata-type security
+View detailed errata information:
+
+# Get details for a specific erratum
+hammer erratum info --id RHSA-2023-1234
+Check errata applicable to specific hosts:
+
+In the web interface, go to Hosts > All Hosts
+Click on a specific host
+Navigate to the Errata tab to see applicable updates
+Task 2: Apply Updates to Systems via Scheduled Jobs
+Subtask 2.1: Prepare for Patch Deployment
+Create a maintenance window:
+
+# Set up a maintenance notification
+echo "System maintenance scheduled for $(date)" > /etc/motd
+Verify host connectivity:
+
+# Test connection to managed hosts
+hammer host list --organization "Default Organization"
+
+# Check specific host status
+hammer host info --name client1.example.com
+Subtask 2.2: Schedule Errata Installation
+Schedule updates via web interface:
+
+Navigate to Hosts > All Hosts
+Select the target host(s)
+Click Select Action > Schedule Remote Job
+Choose Install Errata from the job templates
+Configure the scheduled job:
+
+Job Template: Install Errata - Katello Script Default
+Schedule: Set future date/time for maintenance window
+Errata: Select specific errata or choose "All applicable"
+Alternative command-line scheduling:
+
+# Schedule errata installation for a specific host
+hammer job-invocation create \
+  --job-template "Install Errata - Katello Script Default" \
+  --search-query "name = client1.example.com" \
+  --start-at "2024-01-15 02:00:00" \
+  --inputs errata="RHSA-2023-1234,RHBA-2023-5678"
+Subtask 2.3: Monitor Job Execution
+Track job progress:
+
+# List recent job invocations
+hammer job-invocation list
+
+# Get detailed job status
+hammer job-invocation info --id JOB_ID
+View job output:
+
+In the web interface, go to Monitor > Jobs
+Click on the running/completed job
+Review the Output tab for detailed execution logs
+Verify successful installation:
+
+# Check installed packages on target host
+ssh root@client1.example.com "rpm -qa --last | head -20"
+
+# Verify specific security updates
+ssh root@client1.example.com "yum history list"
+Task 3: Test Patch Management for Multiple Hosts Using Host Collections
+Subtask 3.1: Create Host Collections
+Create a host collection via web interface:
+
+Navigate to Hosts > Host Collections
+Click Create Host Collection
+Name: Production Servers
+Description: Critical production systems requiring coordinated patching
+Create host collection via command line:
+
+# Create a new host collection
+hammer host-collection create \
+  --name "Development Servers" \
+  --description "Development environment systems" \
+  --organization "Default Organization"
+Add hosts to collections:
+
+# Add multiple hosts to a collection
+hammer host-collection add-host \
+  --name "Production Servers" \
+  --host-ids 1,2,3,4 \
+  --organization "Default Organization"
+Subtask 3.2: Apply Patches to Host Collections
+Install errata on host collection:
+
+# Apply all security errata to a host collection
+hammer host-collection erratum install \
+  --name "Production Servers" \
+  --errata "RHSA-2023-1234,RHSA-2023-5678" \
+  --organization "Default Organization"
+Schedule bulk updates:
+
+# Schedule updates for entire host collection
+hammer job-invocation create \
+  --job-template "Install Errata - Katello Script Default" \
+  --search-query "host_collection = \"Production Servers\"" \
+  --start-at "2024-01-15 03:00:00" \
+  --inputs errata="security"
+Subtask 3.3: Implement Staged Rollout Strategy
+Create staging groups:
+
+# Create collections for staged deployment
+hammer host-collection create --name "Patch Group 1" --organization "Default Organization"
+hammer host-collection create --name "Patch Group 2" --organization "Default Organization"
+hammer host-collection create --name "Patch Group 3" --organization "Default Organization"
+Distribute hosts across groups:
+
+# Add 25% of hosts to Group 1 (early adopters)
+hammer host-collection add-host --name "Patch Group 1" --host-ids 1,2
+
+# Add 50% of hosts to Group 2 (main deployment)
+hammer host-collection add-host --name "Patch Group 2" --host-ids 3,4,5,6
+
+# Add remaining hosts to Group 3 (final wave)
+hammer host-collection add-host --name "Patch Group 3" --host-ids 7,8
+Execute staged deployment:
+
+# Stage 1: Deploy to early adopters
+hammer job-invocation create \
+  --job-template "Install Errata - Katello Script Default" \
+  --search-query "host_collection = \"Patch Group 1\"" \
+  --start-at "2024-01-15 01:00:00"
+
+# Stage 2: Deploy to main group (after validation)
+hammer job-invocation create \
+  --job-template "Install Errata - Katello Script Default" \
+  --search-query "host_collection = \"Patch Group 2\"" \
+  --start-at "2024-01-15 02:00:00"
+
+# Stage 3: Deploy to remaining systems
+hammer job-invocation create \
+  --job-template "Install Errata - Katello Script Default" \
+  --search-query "host_collection = \"Patch Group 3\"" \
+  --start-at "2024-01-15 03:00:00"
+Subtask 3.4: Validate Patch Deployment
+Create validation script:
+
+# Create a post-patch validation script
+cat > /tmp/patch_validation.sh << 'EOF'
+#!/bin/bash
+
+echo "=== Patch Validation Report ==="
+echo "Host: $(hostname)"
+echo "Date: $(date)"
+echo
+
+echo "=== Recently Installed Packages ==="
+rpm -qa --last | head -10
+echo
+
+echo "=== System Uptime ==="
+uptime
+echo
+
+echo "=== Critical Services Status ==="
+systemctl is-active sshd httpd chronyd
+echo
+
+echo "=== Available Security Updates ==="
+yum --security check-update 2>/dev/null | grep -i security || echo "No security updates available"
+echo
+
+echo "=== Disk Space ==="
+df -h / /var /tmp
+EOF
+
+chmod +x /tmp/patch_validation.sh
+Run validation across host collections:
+
+# Execute validation script on all patched systems
+hammer job-invocation create \
+  --job-template "Run Command - Script Default" \
+  --search-query "host_collection = \"Production Servers\"" \
+  --inputs command="/tmp/patch_validation.sh"
+Generate compliance report:
+
+# Check errata compliance status
+hammer host list --search "errata_status = security_needed" \
+  --organization "Default Organization"
+
+# Generate detailed compliance report
+hammer report-template generate \
+  --name "Host - Errata Report" \
+  --organization "Default Organization"
+Advanced Configuration and Best Practices
+Automated Patch Management Setup
+Create recurring patch schedules:
+
+# Create a recurring job template for monthly patching
+hammer recurring-logic create \
+  --cron-line "0 2 1 * *" \
+  --end-time "2025-12-31 23:59:59" \
+  --max-iteration 12
+Configure maintenance windows:
+
+# Create maintenance window configuration
+cat > /etc/satellite-maintenance.conf << 'EOF'
+# Maintenance Window Configuration
+MAINTENANCE_START="02:00"
+MAINTENANCE_END="06:00"
+MAINTENANCE_DAYS="Sunday"
+NOTIFICATION_EMAIL="admin@example.com"
+EOF
+Emergency Patch Deployment
+Rapid security patch deployment:
+# Emergency security patch script
+cat > /usr/local/bin/emergency_patch.sh << 'EOF'
+#!/bin/bash
+
+ERRATUM_ID=$1
+HOST_COLLECTION=$2
+
+if [ -z "$ERRATUM_ID" ] || [ -z "$HOST_COLLECTION" ]; then
+    echo "Usage: $0 <erratum_id> <host_collection>"
+    exit 1
+fi
+
+echo "Deploying emergency patch $ERRATUM_ID to $HOST_COLLECTION"
+
+hammer job-invocation create \
+  --job-template "Install Errata - Katello Script Default" \
+  --search-query "host_collection = \"$HOST_COLLECTION\"" \
+  --inputs errata="$ERRATUM_ID" \
+  --start-at "now"
+EOF
+
+chmod +x /usr/local/bin/emergency_patch.sh
+Troubleshooting Common Issues
+Issue 1: Errata Installation Failures
+Problem: Patches fail to install on some hosts
+
+Solution:
+
+# Check host connectivity
+hammer host list --search "last_checkin < \"1 hour ago\""
+
+# Verify repository synchronization
+hammer repository list --organization "Default Organization" | grep -i "sync.*success"
+
+# Check client registration status
+ssh root@problematic-host "subscription-manager status"
+Issue 2: Scheduling Conflicts
+Problem: Multiple patch jobs conflict with each other
+
+Solution:
+
+# List active and scheduled jobs
+hammer job-invocation list --search "state = running OR state = scheduled"
+
+# Cancel conflicting jobs if necessary
+hammer job-invocation cancel --id CONFLICTING_JOB_ID
+Issue 3: Host Collection Management Issues
+Problem: Hosts not responding to collection-based commands
+
+Solution:
+
+# Verify host collection membership
+hammer host-collection hosts --name "Production Servers"
+
+# Check individual host status
+hammer host info --name problematic-host.example.com
+
+# Re-register problematic hosts
+ssh root@problematic-host "subscription-manager clean && subscription-manager register"
+Conclusion
+In this comprehensive lab, you have successfully learned to manage enterprise patch deployment using Red Hat Satellite and open-source tools. You accomplished the following key objectives:
+
+What You Learned:
+
+Errata Identification: You learned to identify and categorize different types of system updates (security, bugfix, and enhancement errata)
+Scheduled Patch Management: You implemented automated patch deployment using scheduled jobs and maintenance windows
+Host Collection Management: You organized systems into logical groups for coordinated patch management
+Staged Deployment: You implemented a phased rollout strategy to minimize risk during patch deployment
+Validation and Compliance: You created validation procedures to ensure successful patch deployment and system compliance
+Why This Matters: Effective patch management is critical for maintaining system security, stability, and compliance in enterprise environments. The skills you've developed enable you to:
+
+Protect systems from security vulnerabilities through timely patch deployment
+Minimize downtime through coordinated maintenance windows
+Reduce operational risk through staged deployment strategies
+Maintain compliance with security policies and regulations
+Scale patch management across hundreds or thousands of systems
+These capabilities are essential for system administrators and DevOps engineers working in enterprise environments, and directly support the objectives of the Red Hat Certified Specialist in Deployment and Systems Management certification.
+
+Next Steps:
+
+Practice implementing patch management policies in different organizational scenarios
+Explore integration with monitoring and alerting systems
+Investigate automated rollback procedures for failed deployments
+Study compliance reporting and audit trail management
