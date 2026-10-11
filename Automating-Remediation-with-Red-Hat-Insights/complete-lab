@@ -1,0 +1,559 @@
+Lab 14: Automating Remediation with Red Hat Insights
+Objectives
+By the end of this lab, students will be able to:
+
+Configure Red Hat Insights for automatic remediation on RHEL systems
+Set up automated patching and update mechanisms using Insights recommendations
+Validate and monitor automated remediation processes
+Understand the integration between Red Hat Insights and system management tools
+Implement best practices for automated system maintenance and security updates
+Prerequisites
+Before starting this lab, students should have:
+
+Basic understanding of Linux system administration
+Familiarity with RHEL/CentOS package management (yum/dnf)
+Knowledge of systemd services and timers
+Understanding of SSH and remote system management
+Basic scripting knowledge (bash)
+Familiarity with Red Hat subscription management
+Lab Environment
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines for this lab. Simply click Start Lab to access your environment - no need to build your own VM or configure initial settings.
+
+Your lab environment includes:
+
+RHEL 8/9 system with root access
+Pre-installed insights-client package
+Network connectivity for Red Hat services
+Sample applications and services for testing
+Task 1: Configure Red Hat Insights for Automatic Remediation
+Subtask 1.1: Install and Register Insights Client
+First, we'll install the Red Hat Insights client and register the system.
+
+Update the system packages:
+sudo dnf update -y
+Install the insights-client package:
+sudo dnf install -y insights-client
+Register the system with Red Hat Insights:
+sudo insights-client --register
+Verify the registration:
+sudo insights-client --status
+Expected output should show the system is registered and connected.
+
+Subtask 1.2: Configure Insights Client Settings
+Create a custom configuration file:
+sudo cp /etc/insights-client/insights-client.conf /etc/insights-client/insights-client.conf.backup
+Edit the configuration file:
+sudo nano /etc/insights-client/insights-client.conf
+Add the following configuration settings:
+[insights-client]
+# Enable automatic updates
+auto_config=True
+# Set collection schedule
+cron_schedule=0 2 * * *
+# Enable remediation
+remediation=True
+# Log level for debugging
+loglevel=INFO
+Restart the insights-client service:
+sudo systemctl restart insights-client
+sudo systemctl enable insights-client
+Subtask 1.3: Set Up Automated Data Collection
+Create a systemd timer for regular insights collection:
+sudo nano /etc/systemd/system/insights-collection.timer
+Add the timer configuration:
+[Unit]
+Description=Red Hat Insights Collection Timer
+Requires=insights-collection.service
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=3600
+
+[Install]
+WantedBy=timers.target
+Create the corresponding service file:
+sudo nano /etc/systemd/system/insights-collection.service
+Add the service configuration:
+[Unit]
+Description=Red Hat Insights Collection Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/insights-client
+User=root
+StandardOutput=journal
+StandardError=journal
+Enable and start the timer:
+sudo systemctl daemon-reload
+sudo systemctl enable insights-collection.timer
+sudo systemctl start insights-collection.timer
+Verify the timer is active:
+sudo systemctl list-timers insights-collection.timer
+Task 2: Set Up Automated Patching and Updates via Insights
+Subtask 2.1: Install and Configure DNF Automatic
+Install dnf-automatic package:
+sudo dnf install -y dnf-automatic
+Configure dnf-automatic for security updates:
+sudo nano /etc/dnf/automatic.conf
+Modify the configuration:
+[commands]
+upgrade_type = security
+random_sleep = 3600
+network_online_timeout = 60
+download_updates = yes
+apply_updates = yes
+
+[emitters]
+emit_via = stdio
+system_name = None
+
+[command_email]
+email_from = root@localhost
+email_to = admin@localhost
+email_host = localhost
+
+[base]
+debuglevel = 1
+Enable and start dnf-automatic timer:
+sudo systemctl enable --now dnf-automatic.timer
+Subtask 2.2: Create Insights-Based Remediation Script
+Create a remediation script directory:
+sudo mkdir -p /opt/insights-remediation
+Create the main remediation script:
+sudo nano /opt/insights-remediation/auto-remediate.sh
+Add the remediation script content:
+#!/bin/bash
+
+# Red Hat Insights Automated Remediation Script
+# This script processes Insights recommendations and applies safe remediations
+
+LOG_FILE="/var/log/insights-remediation.log"
+INSIGHTS_DATA_DIR="/var/lib/insights"
+
+# Function to log messages
+log_message() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" | tee -a "$LOG_FILE"
+}
+
+# Function to check if system is registered with Insights
+check_insights_registration() {
+    if insights-client --status | grep -q "Successfully registered"; then
+        log_message "System is registered with Red Hat Insights"
+        return 0
+    else
+        log_message "ERROR: System is not registered with Red Hat Insights"
+        return 1
+    fi
+}
+
+# Function to collect latest insights data
+collect_insights_data() {
+    log_message "Collecting latest Insights data..."
+    if insights-client; then
+        log_message "Insights data collection completed successfully"
+        return 0
+    else
+        log_message "ERROR: Failed to collect Insights data"
+        return 1
+    fi
+}
+
+# Function to apply security updates
+apply_security_updates() {
+    log_message "Checking for security updates..."
+    
+    # Get list of security updates
+    SECURITY_UPDATES=$(dnf --security check-update 2>/dev/null | grep -v "^$" | wc -l)
+    
+    if [ "$SECURITY_UPDATES" -gt 0 ]; then
+        log_message "Found $SECURITY_UPDATES security updates. Applying..."
+        
+        # Apply security updates
+        if dnf -y --security update; then
+            log_message "Security updates applied successfully"
+            
+            # Check if reboot is required
+            if needs-restarting -r; then
+                log_message "System reboot required after updates"
+                # Schedule reboot for maintenance window (2 AM)
+                echo "shutdown -r +60 'System reboot for security updates'" | at now + 1 minute 2>/dev/null || true
+            fi
+        else
+            log_message "ERROR: Failed to apply security updates"
+            return 1
+        fi
+    else
+        log_message "No security updates available"
+    fi
+}
+
+# Function to fix common configuration issues
+fix_configuration_issues() {
+    log_message "Checking for common configuration issues..."
+    
+    # Fix SSH configuration issues
+    if [ -f /etc/ssh/sshd_config ]; then
+        # Ensure SSH root login is properly configured
+        if grep -q "^PermitRootLogin yes" /etc/ssh/sshd_config; then
+            log_message "WARNING: Root login via SSH is enabled"
+            # Uncomment the next line to automatically disable root login
+            # sed -i 's/^PermitRootLogin yes/PermitRootLogin no/' /etc/ssh/sshd_config
+        fi
+        
+        # Ensure SSH protocol version 2 is used
+        if ! grep -q "^Protocol 2" /etc/ssh/sshd_config; then
+            echo "Protocol 2" >> /etc/ssh/sshd_config
+            log_message "Added Protocol 2 to SSH configuration"
+            systemctl reload sshd
+        fi
+    fi
+    
+    # Fix file permissions on sensitive files
+    chmod 600 /etc/ssh/ssh_host_*_key 2>/dev/null || true
+    chmod 644 /etc/ssh/ssh_host_*_key.pub 2>/dev/null || true
+    
+    log_message "Configuration checks completed"
+}
+
+# Function to update system packages based on Insights recommendations
+update_packages() {
+    log_message "Updating packages based on Insights recommendations..."
+    
+    # Update all packages (can be modified to be more selective)
+    if dnf -y update; then
+        log_message "Package updates completed successfully"
+    else
+        log_message "ERROR: Package update failed"
+        return 1
+    fi
+}
+
+# Main execution
+main() {
+    log_message "Starting Insights automated remediation process"
+    
+    # Check prerequisites
+    if ! check_insights_registration; then
+        exit 1
+    fi
+    
+    # Collect latest data
+    if ! collect_insights_data; then
+        exit 1
+    fi
+    
+    # Apply remediations
+    apply_security_updates
+    fix_configuration_issues
+    
+    log_message "Insights automated remediation process completed"
+}
+
+# Execute main function
+main "$@"
+Make the script executable:
+sudo chmod +x /opt/insights-remediation/auto-remediate.sh
+Subtask 2.3: Create Systemd Service for Automated Remediation
+Create the systemd service file:
+sudo nano /etc/systemd/system/insights-remediation.service
+Add the service configuration:
+[Unit]
+Description=Red Hat Insights Automated Remediation
+After=network-online.target insights-client.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/insights-remediation/auto-remediate.sh
+User=root
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=1800
+
+[Install]
+WantedBy=multi-user.target
+Create the systemd timer:
+sudo nano /etc/systemd/system/insights-remediation.timer
+Add the timer configuration:
+[Unit]
+Description=Red Hat Insights Automated Remediation Timer
+Requires=insights-remediation.service
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=1800
+
+[Install]
+WantedBy=timers.target
+Enable and start the timer:
+sudo systemctl daemon-reload
+sudo systemctl enable insights-remediation.timer
+sudo systemctl start insights-remediation.timer
+Task 3: Validate Automated Remediation Processes
+Subtask 3.1: Test Manual Remediation Execution
+Run the remediation script manually:
+sudo /opt/insights-remediation/auto-remediate.sh
+Check the log file for results:
+sudo tail -f /var/log/insights-remediation.log
+Verify Insights client status:
+sudo insights-client --status
+sudo insights-client --check-results
+Subtask 3.2: Monitor Automated Processes
+Check systemd timer status:
+sudo systemctl status insights-remediation.timer
+sudo systemctl list-timers | grep insights
+View recent journal entries:
+sudo journalctl -u insights-remediation.service -f
+sudo journalctl -u insights-collection.service -f
+Create a monitoring script:
+sudo nano /opt/insights-remediation/monitor.sh
+Add monitoring script content:
+#!/bin/bash
+
+# Insights Remediation Monitoring Script
+
+echo "=== Red Hat Insights Remediation Status ==="
+echo
+
+# Check Insights client status
+echo "1. Insights Client Status:"
+insights-client --status
+echo
+
+# Check timer status
+echo "2. Remediation Timer Status:"
+systemctl is-active insights-remediation.timer
+systemctl is-enabled insights-remediation.timer
+echo
+
+# Check last execution
+echo "3. Last Remediation Execution:"
+systemctl status insights-remediation.service | grep -A 5 "Active:"
+echo
+
+# Check log file
+echo "4. Recent Log Entries:"
+tail -10 /var/log/insights-remediation.log 2>/dev/null || echo "No log file found"
+echo
+
+# Check for pending updates
+echo "5. Pending Security Updates:"
+dnf --security check-update 2>/dev/null | grep -c "updates" || echo "No security updates pending"
+echo
+
+# Check system uptime and last reboot
+echo "6. System Status:"
+echo "Uptime: $(uptime -p)"
+echo "Last reboot: $(who -b | awk '{print $3, $4}')"
+echo
+
+echo "=== Monitoring Complete ==="
+Make the monitoring script executable:
+sudo chmod +x /opt/insights-remediation/monitor.sh
+Run the monitoring script:
+sudo /opt/insights-remediation/monitor.sh
+Subtask 3.3: Validate Remediation Results
+Create a validation script:
+sudo nano /opt/insights-remediation/validate.sh
+Add validation script content:
+#!/bin/bash
+
+# Insights Remediation Validation Script
+
+VALIDATION_LOG="/var/log/insights-validation.log"
+
+# Function to log validation results
+log_validation() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" | tee -a "$VALIDATION_LOG"
+}
+
+echo "=== Red Hat Insights Remediation Validation ==="
+
+# Test 1: Verify Insights registration
+log_validation "Testing Insights registration..."
+if insights-client --status | grep -q "Successfully registered"; then
+    log_validation "PASS: System is registered with Red Hat Insights"
+else
+    log_validation "FAIL: System is not properly registered"
+fi
+
+# Test 2: Check if remediation service is enabled
+log_validation "Testing remediation service configuration..."
+if systemctl is-enabled insights-remediation.timer >/dev/null 2>&1; then
+    log_validation "PASS: Remediation timer is enabled"
+else
+    log_validation "FAIL: Remediation timer is not enabled"
+fi
+
+# Test 3: Verify log file exists and has recent entries
+log_validation "Testing log file accessibility..."
+if [ -f /var/log/insights-remediation.log ]; then
+    LAST_LOG_ENTRY=$(tail -1 /var/log/insights-remediation.log 2>/dev/null)
+    if [ -n "$LAST_LOG_ENTRY" ]; then
+        log_validation "PASS: Remediation log file exists and has entries"
+        log_validation "Last entry: $LAST_LOG_ENTRY"
+    else
+        log_validation "WARN: Log file exists but appears empty"
+    fi
+else
+    log_validation "WARN: Remediation log file does not exist yet"
+fi
+
+# Test 4: Check DNF automatic configuration
+log_validation "Testing DNF automatic configuration..."
+if systemctl is-active dnf-automatic.timer >/dev/null 2>&1; then
+    log_validation "PASS: DNF automatic timer is active"
+else
+    log_validation "FAIL: DNF automatic timer is not active"
+fi
+
+# Test 5: Verify network connectivity to Red Hat services
+log_validation "Testing connectivity to Red Hat services..."
+if curl -s --connect-timeout 10 https://cert-api.access.redhat.com/r/insights >/dev/null; then
+    log_validation "PASS: Can connect to Red Hat Insights API"
+else
+    log_validation "FAIL: Cannot connect to Red Hat Insights API"
+fi
+
+# Test 6: Check for recent Insights data collection
+log_validation "Testing recent data collection..."
+INSIGHTS_LAST_RUN=$(find /var/lib/insights -name "*.json" -mtime -1 2>/dev/null | wc -l)
+if [ "$INSIGHTS_LAST_RUN" -gt 0 ]; then
+    log_validation "PASS: Recent Insights data found"
+else
+    log_validation "WARN: No recent Insights data found"
+fi
+
+log_validation "Validation completed. Check $VALIDATION_LOG for detailed results."
+echo
+echo "Validation log saved to: $VALIDATION_LOG"
+Make the validation script executable and run it:
+sudo chmod +x /opt/insights-remediation/validate.sh
+sudo /opt/insights-remediation/validate.sh
+Subtask 3.4: Set Up Alerting and Notifications
+Create a notification script:
+sudo nano /opt/insights-remediation/notify.sh
+Add notification script content:
+#!/bin/bash
+
+# Simple notification script for remediation events
+# This can be extended to send emails, Slack messages, etc.
+
+NOTIFICATION_LOG="/var/log/insights-notifications.log"
+
+notify() {
+    local message="$1"
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    
+    # Log the notification
+    echo "$timestamp - $message" >> "$NOTIFICATION_LOG"
+    
+    # Send to system log
+    logger -t "insights-remediation" "$message"
+    
+    # Display on console if running interactively
+    if [ -t 1 ]; then
+        echo "NOTIFICATION: $message"
+    fi
+}
+
+# Example usage
+case "$1" in
+    "remediation-start")
+        notify "Automated remediation process started"
+        ;;
+    "remediation-complete")
+        notify "Automated remediation process completed successfully"
+        ;;
+    "remediation-error")
+        notify "ERROR: Automated remediation process failed"
+        ;;
+    "updates-applied")
+        notify "Security updates have been applied to the system"
+        ;;
+    "reboot-required")
+        notify "System reboot is required after applying updates"
+        ;;
+    *)
+        notify "Custom notification: $1"
+        ;;
+esac
+Make the notification script executable:
+sudo chmod +x /opt/insights-remediation/notify.sh
+Test the notification system:
+sudo /opt/insights-remediation/notify.sh "remediation-start"
+sudo /opt/insights-remediation/notify.sh "Test notification from validation"
+Check notification logs:
+sudo tail /var/log/insights-notifications.log
+Troubleshooting Common Issues
+Issue 1: Insights Client Registration Fails
+Symptoms: Registration command fails with authentication errors
+
+Solution:
+
+# Check subscription status
+sudo subscription-manager status
+
+# Re-register if needed
+sudo subscription-manager register --username=your_username --password=your_password
+
+# Then register with Insights
+sudo insights-client --register
+Issue 2: Automated Updates Not Working
+Symptoms: DNF automatic timer is not applying updates
+
+Solution:
+
+# Check timer status
+sudo systemctl status dnf-automatic.timer
+
+# Check configuration
+sudo cat /etc/dnf/automatic.conf
+
+# Manually test update process
+sudo dnf --security check-update
+sudo dnf -y --security update
+Issue 3: Remediation Script Permissions
+Symptoms: Script fails to execute with permission errors
+
+Solution:
+
+# Fix script permissions
+sudo chmod +x /opt/insights-remediation/*.sh
+
+# Check SELinux context if needed
+sudo restorecon -R /opt/insights-remediation/
+
+# Verify script ownership
+sudo chown root:root /opt/insights-remediation/*.sh
+Conclusion
+In this lab, you have successfully:
+
+Configured Red Hat Insights for automatic remediation by installing and registering the insights-client, setting up automated data collection, and configuring the client for regular updates.
+
+Set up automated patching and updates by implementing DNF automatic for security updates, creating comprehensive remediation scripts, and establishing systemd services and timers for automated execution.
+
+Validated automated remediation processes by testing manual execution, monitoring automated processes, and implementing validation and notification systems.
+
+Key Accomplishments
+Automated Security Management: Your system now automatically collects security recommendations from Red Hat Insights and applies appropriate remediations.
+
+Proactive System Maintenance: The automated patching system ensures security updates are applied regularly without manual intervention.
+
+Monitoring and Validation: You've implemented comprehensive monitoring and validation scripts to ensure the remediation processes work correctly.
+
+Scalable Solution: The scripts and configurations you've created can be easily deployed across multiple systems in an enterprise environment.
+
+Why This Matters
+Automated remediation with Red Hat Insights is crucial for:
+
+Security Compliance: Ensures systems stay up-to-date with the latest security patches
+Operational Efficiency: Reduces manual workload for system administrators
+Risk Reduction: Minimizes the window of vulnerability by applying fixes quickly
+Consistency: Ensures all systems receive the same level of maintenance and security updates
+Audit Trail: Provides comprehensive logging for compliance and troubleshooting
+This automated approach to system management is essential for modern IT environments where manual patching and remediation cannot keep pace with the volume of systems and security threats. The skills you've learned in this lab are directly applicable to enterprise environments and align with Red Hat Certified Specialist certification requirements.
