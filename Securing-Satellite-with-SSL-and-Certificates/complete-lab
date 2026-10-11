@@ -1,0 +1,346 @@
+Video
+Lab Material
+Lab 16: Securing Satellite with SSL and Certificates
+Objectives
+By the end of this lab, students will be able to:
+
+Configure SSL/TLS encryption for Red Hat Satellite server
+Set up and manage internal certificate authorities for Satellite
+Implement secure communication channels for all Satellite services
+Verify SSL certificate installation and functionality
+Troubleshoot common SSL configuration issues in Satellite environments
+Prerequisites
+Before starting this lab, students should have:
+
+Basic understanding of Linux system administration
+Familiarity with Red Hat Satellite concepts and architecture
+Knowledge of SSL/TLS certificates and PKI fundamentals
+Experience with command-line interface operations
+Understanding of network security principles
+Lab Environment
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines for this lab. Simply click Start Lab to access your environment - no need to build your own VM or install software.
+
+Your lab environment includes:
+
+Red Hat Enterprise Linux 8/9 server with Satellite 6.x installed
+Root access to the system
+All necessary packages and dependencies pre-installed
+Network connectivity for certificate operations
+Task 1: Configure SSL for Satellite
+Subtask 1.1: Verify Current Satellite Installation
+First, let's check the current status of your Satellite installation and identify the SSL configuration.
+
+Check Satellite status:
+satellite-maintain service status
+Verify current SSL configuration:
+satellite-installer --help | grep -i ssl
+Check current certificate information:
+openssl x509 -in /etc/pki/katello/certs/katello-apache.crt -text -noout
+Subtask 1.2: Generate SSL Certificate Signing Request (CSR)
+Now we'll create a proper SSL certificate for our Satellite server.
+
+Create a directory for SSL operations:
+mkdir -p /root/satellite-ssl
+cd /root/satellite-ssl
+Generate a private key:
+openssl genrsa -out satellite.key 2048
+chmod 600 satellite.key
+Create a certificate signing request configuration file:
+cat > satellite.conf << EOF
+[req]
+distinguished_name = req_distinguished_name
+req_extensions = v3_req
+prompt = no
+
+[req_distinguished_name]
+C = US
+ST = YourState
+L = YourCity
+O = YourOrganization
+OU = IT Department
+CN = $(hostname -f)
+
+[v3_req]
+keyUsage = keyEncipherment, dataEncipherment
+extendedKeyUsage = serverAuth
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1 = $(hostname -f)
+DNS.2 = $(hostname -s)
+IP.1 = $(ip route get 1 | awk '{print $7}' | head -1)
+EOF
+Generate the certificate signing request:
+openssl req -new -key satellite.key -out satellite.csr -config satellite.conf
+Subtask 1.3: Create Self-Signed Certificate for Lab Environment
+For this lab, we'll create a self-signed certificate. In production, you would send the CSR to a trusted Certificate Authority.
+
+Generate self-signed certificate:
+openssl x509 -req -in satellite.csr -signkey satellite.key -out satellite.crt -days 365 -extensions v3_req -extfile satellite.conf
+Verify the certificate:
+openssl x509 -in satellite.crt -text -noout | head -20
+Create certificate bundle:
+cp satellite.crt satellite-bundle.crt
+Task 2: Set up Internal Certificate Management for Satellite
+Subtask 2.1: Configure Satellite with Custom SSL Certificate
+Now we'll configure Satellite to use our custom SSL certificate.
+
+Stop Satellite services:
+satellite-maintain service stop
+Backup existing certificates:
+mkdir -p /root/satellite-ssl-backup
+cp -r /etc/pki/katello/ /root/satellite-ssl-backup/
+Run satellite-installer with custom certificates:
+satellite-installer \
+  --certs-server-cert /root/satellite-ssl/satellite.crt \
+  --certs-server-key /root/satellite-ssl/satellite.key \
+  --certs-server-ca-cert /root/satellite-ssl/satellite-bundle.crt \
+  --certs-update-server-ca true
+Subtask 2.2: Configure Internal Certificate Authority
+Let's set up an internal CA for managing client certificates and other internal SSL needs.
+
+Create CA directory structure:
+mkdir -p /etc/satellite-ca/{certs,crl,newcerts,private}
+chmod 700 /etc/satellite-ca/private
+touch /etc/satellite-ca/index.txt
+echo 1000 > /etc/satellite-ca/serial
+Create CA configuration file:
+cat > /etc/satellite-ca/openssl.cnf << EOF
+[ ca ]
+default_ca = CA_default
+
+[ CA_default ]
+dir               = /etc/satellite-ca
+certs             = \$dir/certs
+crl_dir           = \$dir/crl
+new_certs_dir     = \$dir/newcerts
+database          = \$dir/index.txt
+serial            = \$dir/serial
+RANDFILE          = \$dir/private/.rand
+
+private_key       = \$dir/private/ca.key
+certificate       = \$dir/certs/ca.crt
+
+crlnumber         = \$dir/crlnumber
+crl               = \$dir/crl/ca.crl
+crl_extensions    = crl_ext
+default_crl_days  = 30
+
+default_md        = sha256
+name_opt          = ca_default
+cert_opt          = ca_default
+default_days      = 375
+preserve          = no
+policy            = policy_strict
+
+[ policy_strict ]
+countryName             = match
+stateOrProvinceName     = match
+organizationName        = match
+organizationalUnitName  = optional
+commonName              = supplied
+emailAddress            = optional
+
+[ req ]
+default_bits        = 2048
+distinguished_name  = req_distinguished_name
+string_mask         = utf8only
+default_md          = sha256
+x509_extensions     = v3_ca
+
+[ req_distinguished_name ]
+countryName                     = Country Name (2 letter code)
+stateOrProvinceName             = State or Province Name
+localityName                    = Locality Name
+0.organizationName              = Organization Name
+organizationalUnitName          = Organizational Unit Name
+commonName                      = Common Name
+emailAddress                    = Email Address
+
+[ v3_ca ]
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid:always,issuer
+basicConstraints = critical, CA:true
+keyUsage = critical, digitalSignature, cRLSign, keyCertSign
+
+[ server_cert ]
+basicConstraints = CA:FALSE
+nsCertType = server
+nsComment = "OpenSSL Generated Server Certificate"
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid,issuer:always
+keyUsage = critical, digitalSignature, keyEncipherment
+extendedKeyUsage = serverAuth
+EOF
+Generate CA private key:
+openssl genrsa -out /etc/satellite-ca/private/ca.key 4096
+chmod 400 /etc/satellite-ca/private/ca.key
+Create CA certificate:
+openssl req -config /etc/satellite-ca/openssl.cnf \
+  -key /etc/satellite-ca/private/ca.key \
+  -new -x509 -days 7300 -sha256 -extensions v3_ca \
+  -out /etc/satellite-ca/certs/ca.crt \
+  -subj "/C=US/ST=YourState/L=YourCity/O=YourOrganization/OU=IT Department/CN=Satellite Internal CA"
+Subtask 2.3: Configure Satellite Services for SSL
+Update Satellite configuration for SSL:
+satellite-installer \
+  --foreman-ssl true \
+  --certs-update-server-ca true
+Configure Apache SSL settings:
+cat >> /etc/httpd/conf.d/05-foreman-ssl.conf << EOF
+
+# Additional SSL Security Headers
+Header always set Strict-Transport-Security "max-age=31536000; includeSubDomains"
+Header always set X-Content-Type-Options nosniff
+Header always set X-Frame-Options DENY
+Header always set X-XSS-Protection "1; mode=block"
+EOF
+Restart Satellite services:
+satellite-maintain service restart
+Task 3: Ensure All Communication with Satellite is Encrypted and Secure
+Subtask 3.1: Configure Secure Communication Protocols
+Update SSL/TLS protocols in Apache:
+sed -i 's/SSLProtocol all -SSLv2 -SSLv3/SSLProtocol all -SSLv2 -SSLv3 -TLSv1 -TLSv1.1/' /etc/httpd/conf.d/ssl.conf
+Configure strong cipher suites:
+cat >> /etc/httpd/conf.d/ssl.conf << EOF
+
+# Strong SSL Configuration
+SSLCipherSuite ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384
+SSLHonorCipherOrder on
+SSLCompression off
+SSLUseStapling on
+SSLStaplingCache shmcb:/var/run/ocsp(128000)
+EOF
+Subtask 3.2: Configure Database SSL Connections
+Configure PostgreSQL for SSL:
+# Enable SSL in PostgreSQL
+sed -i "s/#ssl = off/ssl = on/" /var/lib/pgsql/data/postgresql.conf
+
+# Configure SSL certificates for PostgreSQL
+cp /root/satellite-ssl/satellite.crt /var/lib/pgsql/data/server.crt
+cp /root/satellite-ssl/satellite.key /var/lib/pgsql/data/server.key
+chown postgres:postgres /var/lib/pgsql/data/server.*
+chmod 600 /var/lib/pgsql/data/server.key
+Update PostgreSQL client authentication:
+echo "hostssl all all 127.0.0.1/32 md5" >> /var/lib/pgsql/data/pg_hba.conf
+Restart PostgreSQL:
+systemctl restart postgresql
+Subtask 3.3: Configure Pulp for SSL
+Update Pulp configuration for SSL:
+cat > /etc/pulp/settings.py << EOF
+CONTENT_ORIGIN = "https://$(hostname -f)"
+ALLOWED_HOSTS = ["$(hostname -f)", "$(hostname -s)", "localhost"]
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql_psycopg2',
+        'NAME': 'pulpcore',
+        'USER': 'pulp',
+        'PASSWORD': 'pulp',
+        'HOST': 'localhost',
+        'PORT': '',
+        'OPTIONS': {'sslmode': 'require'},
+    }
+}
+EOF
+Restart Pulp services:
+systemctl restart pulpcore-api pulpcore-content pulpcore-worker@*
+Subtask 3.4: Verify SSL Configuration
+Test SSL certificate:
+openssl s_client -connect $(hostname -f):443 -servername $(hostname -f) < /dev/null
+Check SSL configuration with SSL Labs-like test:
+curl -I https://$(hostname -f)/
+Verify all services are using SSL:
+netstat -tlnp | grep :443
+ss -tlnp | grep :443
+Test Satellite web interface:
+curl -k -I https://$(hostname -f)/users/login
+Subtask 3.5: Configure Client Certificate Authentication (Optional)
+Generate client certificate:
+cd /root/satellite-ssl
+
+# Generate client private key
+openssl genrsa -out client.key 2048
+
+# Generate client certificate request
+openssl req -new -key client.key -out client.csr \
+  -subj "/C=US/ST=YourState/L=YourCity/O=YourOrganization/OU=IT Department/CN=satellite-client"
+
+# Sign client certificate with our CA
+openssl ca -config /etc/satellite-ca/openssl.cnf \
+  -extensions server_cert -days 365 -notext -md sha256 \
+  -in client.csr -out client.crt -batch
+Configure Apache for client certificate authentication:
+cat >> /etc/httpd/conf.d/05-foreman-ssl.conf << EOF
+
+# Client Certificate Authentication (Optional)
+<Location "/api">
+    SSLVerifyClient optional
+    SSLVerifyDepth 2
+    SSLCACertificateFile /etc/satellite-ca/certs/ca.crt
+</Location>
+EOF
+Verification and Testing
+Test SSL Configuration
+Comprehensive SSL test:
+#!/bin/bash
+echo "=== SSL Configuration Test ==="
+echo "1. Testing HTTPS connectivity..."
+curl -k -s -o /dev/null -w "HTTP Status: %{http_code}\n" https://$(hostname -f)/
+
+echo "2. Testing SSL certificate..."
+echo | openssl s_client -connect $(hostname -f):443 2>/dev/null | openssl x509 -noout -dates
+
+echo "3. Testing SSL protocols..."
+for protocol in tls1_2 tls1_3; do
+    echo -n "Testing $protocol: "
+    echo | openssl s_client -connect $(hostname -f):443 -$protocol 2>/dev/null | grep -q "Verify return code: 0" && echo "OK" || echo "FAILED"
+done
+
+echo "4. Testing cipher suites..."
+nmap --script ssl-enum-ciphers -p 443 $(hostname -f) | grep -A 10 "TLSv1.2"
+Save and run the test script:
+chmod +x /root/ssl-test.sh
+/root/ssl-test.sh
+Troubleshooting Common Issues
+Issue 1: Certificate Verification Failed
+Problem: SSL certificate verification fails Solution:
+
+# Check certificate chain
+openssl verify -CAfile /etc/satellite-ca/certs/ca.crt /root/satellite-ssl/satellite.crt
+
+# Verify certificate matches private key
+openssl x509 -noout -modulus -in /root/satellite-ssl/satellite.crt | openssl md5
+openssl rsa -noout -modulus -in /root/satellite-ssl/satellite.key | openssl md5
+Issue 2: Services Not Starting After SSL Configuration
+Problem: Satellite services fail to start after SSL configuration Solution:
+
+# Check service logs
+journalctl -u httpd -f
+journalctl -u foreman -f
+
+# Verify file permissions
+ls -la /root/satellite-ssl/
+chown root:root /root/satellite-ssl/*
+chmod 644 /root/satellite-ssl/*.crt
+chmod 600 /root/satellite-ssl/*.key
+Issue 3: Browser Certificate Warnings
+Problem: Browser shows certificate warnings Solution:
+
+# Add CA certificate to system trust store
+cp /etc/satellite-ca/certs/ca.crt /etc/pki/ca-trust/source/anchors/satellite-ca.crt
+update-ca-trust
+Conclusion
+In this lab, you have successfully:
+
+Configured SSL/TLS encryption for Red Hat Satellite server, ensuring all web communications are encrypted and secure
+Set up an internal Certificate Authority to manage certificates within your organization, providing centralized certificate management
+Implemented comprehensive security measures including strong cipher suites, secure protocols, and proper certificate validation
+Verified SSL functionality across all Satellite services including web interface, API, and database connections
+Learned troubleshooting techniques for common SSL configuration issues
+Why This Matters: SSL/TLS encryption is critical for protecting sensitive data in enterprise environments. Satellite servers often manage thousands of systems and contain sensitive configuration data, user credentials, and system information. By implementing proper SSL security:
+
+Data Protection: All communication between clients and Satellite is encrypted, preventing eavesdropping and man-in-the-middle attacks
+Authentication: SSL certificates provide server authentication, ensuring clients connect to legitimate Satellite servers
+Compliance: Many regulatory frameworks require encryption of sensitive data in transit
+Trust: Internal Certificate Authorities provide centralized trust management for your organization's infrastructure
+This knowledge is essential for the Red Hat Certified Specialist in Deployment and Systems Management exam and real-world enterprise deployments where security is paramount.
