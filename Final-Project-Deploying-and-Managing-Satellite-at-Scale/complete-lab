@@ -1,0 +1,671 @@
+Lab 20: Final Project: Deploying and Managing Satellite at Scale
+Objectives
+By the end of this lab, students will be able to:
+
+Deploy and configure Red Hat Satellite Server for enterprise-scale infrastructure management
+Implement automated host registration and lifecycle management processes
+Configure automated patching workflows and maintenance schedules
+Set up comprehensive backup, recovery, and monitoring strategies
+Manage multiple systems at scale using Satellite's centralized management capabilities
+Implement best practices for enterprise Red Hat infrastructure management
+Prerequisites
+Before starting this lab, students should have:
+
+Basic understanding of Linux system administration
+Familiarity with Red Hat Enterprise Linux (RHEL) environments
+Knowledge of package management and repository concepts
+Understanding of network configuration and DNS concepts
+Experience with command-line interface operations
+Completion of previous Satellite labs or equivalent knowledge
+Lab Environment
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines for this lab. Simply click Start Lab to access your environment - no need to build your own virtual machines.
+
+Your lab environment includes:
+
+1 Satellite Server (satellite.example.com)
+3 Client systems for management (client1, client2, client3)
+Pre-configured network connectivity
+Required software repositories
+Task 1: Install and Configure Satellite for Multi-Node Management
+Subtask 1.1: Prepare the Satellite Server Environment
+First, let's prepare our Satellite server with the necessary system requirements and configurations.
+
+# Connect to the Satellite server
+ssh root@satellite.example.com
+
+# Update the system
+dnf update -y
+
+# Set the hostname
+hostnamectl set-hostname satellite.example.com
+
+# Configure firewall for Satellite services
+firewall-cmd --permanent --add-port=443/tcp
+firewall-cmd --permanent --add-port=80/tcp
+firewall-cmd --permanent --add-port=53/tcp
+firewall-cmd --permanent --add-port=53/udp
+firewall-cmd --permanent --add-port=67/udp
+firewall-cmd --permanent --add-port=69/udp
+firewall-cmd --permanent --add-port=5647/tcp
+firewall-cmd --permanent --add-port=8140/tcp
+firewall-cmd --permanent --add-port=9090/tcp
+firewall-cmd --reload
+
+# Verify system resources
+free -h
+df -h
+Subtask 1.2: Install Satellite Server
+Now we'll install the Satellite server software and perform initial configuration.
+
+# Enable required repositories
+subscription-manager repos --enable=rhel-8-for-x86_64-baseos-rpms
+subscription-manager repos --enable=rhel-8-for-x86_64-appstream-rpms
+subscription-manager repos --enable=satellite-6.14-for-rhel-8-x86_64-rpms
+subscription-manager repos --enable=satellite-maintenance-6.14-for-rhel-8-x86_64-rpms
+
+# Install Satellite
+dnf install -y satellite
+
+# Run the Satellite installer
+satellite-installer --scenario satellite \
+  --foreman-initial-admin-username admin \
+  --foreman-initial-admin-password redhat123 \
+  --foreman-initial-organization "Example Organization" \
+  --foreman-initial-location "Example Location" \
+  --enable-foreman-plugin-remote-execution \
+  --enable-foreman-plugin-ansible \
+  --enable-foreman-proxy-plugin-ansible
+Subtask 1.3: Configure Initial Satellite Settings
+Configure the basic Satellite settings for multi-node management.
+
+# Create a manifest directory
+mkdir -p /root/satellite-manifests
+
+# Set up initial configuration using hammer CLI
+hammer settings set --name default_download_policy --value immediate
+hammer settings set --name unregister_delete_host --value true
+hammer settings set --name destroy_vm_on_host_delete --value true
+
+# Create lifecycle environments
+hammer lifecycle-environment create --name "Development" --prior "Library" --organization "Example Organization"
+hammer lifecycle-environment create --name "Testing" --prior "Development" --organization "Example Organization"
+hammer lifecycle-environment create --name "Production" --prior "Testing" --organization "Example Organization"
+
+# Create content views
+hammer content-view create --name "RHEL8-Base" --organization "Example Organization"
+hammer content-view create --name "RHEL8-AppStream" --organization "Example Organization"
+Task 2: Automate Host Registration, Patching, and Provisioning
+Subtask 2.1: Set Up Automated Host Registration
+Create automated registration processes for client systems.
+
+# Create activation keys for different environments
+hammer activation-key create --name "ak-rhel8-dev" \
+  --lifecycle-environment "Development" \
+  --content-view "RHEL8-Base" \
+  --organization "Example Organization"
+
+hammer activation-key create --name "ak-rhel8-test" \
+  --lifecycle-environment "Testing" \
+  --content-view "RHEL8-Base" \
+  --organization "Example Organization"
+
+hammer activation-key create --name "ak-rhel8-prod" \
+  --lifecycle-environment "Production" \
+  --content-view "RHEL8-Base" \
+  --organization "Example Organization"
+
+# Create host groups for automated provisioning
+hammer hostgroup create --name "RHEL8-Servers" \
+  --lifecycle-environment "Development" \
+  --content-view "RHEL8-Base" \
+  --organization "Example Organization"
+
+# Generate registration command
+hammer host-registration generate-command \
+  --organization "Example Organization" \
+  --activation-keys "ak-rhel8-dev" \
+  --lifecycle-environment "Development" \
+  --update-packages true \
+  --install-packages katello-agent
+Subtask 2.2: Configure Client Registration Script
+Create a registration script for automated client enrollment.
+
+# Create registration script
+cat > /var/www/html/pub/register_client.sh << 'EOF'
+#!/bin/bash
+
+# Client registration script for Satellite
+SATELLITE_SERVER="satellite.example.com"
+ACTIVATION_KEY="ak-rhel8-dev"
+ORGANIZATION="Example_Organization"
+
+# Install consumer certificate
+rpm -Uvh http://${SATELLITE_SERVER}/pub/katello-ca-consumer-latest.noarch.rpm
+
+# Register with Satellite
+subscription-manager register --org="${ORGANIZATION}" \
+  --activationkey="${ACTIVATION_KEY}" \
+  --serverurl="https://${SATELLITE_SERVER}" \
+  --baseurl="https://${SATELLITE_SERVER}/pulp/repos"
+
+# Install Katello agent
+dnf install -y katello-agent
+
+# Enable and start services
+systemctl enable goferd
+systemctl start goferd
+
+# Install Puppet agent
+dnf install -y puppet-agent
+
+# Configure Puppet
+echo "server = ${SATELLITE_SERVER}" >> /etc/puppetlabs/puppet/puppet.conf
+systemctl enable puppet
+systemctl start puppet
+
+echo "Client registration completed successfully!"
+EOF
+
+chmod +x /var/www/html/pub/register_client.sh
+Subtask 2.3: Register Client Systems
+Now let's register our client systems using the automated process.
+
+# Connect to client1 and register
+ssh root@client1.example.com
+curl -O http://satellite.example.com/pub/register_client.sh
+bash register_client.sh
+
+# Connect to client2 and register
+ssh root@client2.example.com
+curl -O http://satellite.example.com/pub/register_client.sh
+bash register_client.sh
+
+# Connect to client3 and register
+ssh root@client3.example.com
+curl -O http://satellite.example.com/pub/register_client.sh
+bash register_client.sh
+Subtask 2.4: Configure Automated Patching
+Set up automated patching workflows for registered systems.
+
+# Return to Satellite server
+ssh root@satellite.example.com
+
+# Create errata filters for content views
+hammer content-view filter create --name "Security-Only" \
+  --type erratum --inclusion true \
+  --content-view "RHEL8-Base" \
+  --organization "Example Organization"
+
+hammer content-view filter rule create --content-view "RHEL8-Base" \
+  --content-view-filter "Security-Only" \
+  --types security \
+  --organization "Example Organization"
+
+# Create maintenance windows
+hammer job-template create --name "Security Updates" \
+  --job-category "Packages" \
+  --provider-type script \
+  --template-inputs "package_action=update" \
+  --file /usr/share/foreman_remote_execution/job_templates/package_action.erb
+
+# Schedule automated patching job
+hammer job-invocation create --job-template "Security Updates" \
+  --search-query "lifecycle_environment = Development" \
+  --start-at "$(date -d 'next Sunday 02:00' '+%Y-%m-%d %H:%M')" \
+  --recurrence "weekly"
+Subtask 2.5: Set Up Provisioning Templates
+Configure automated provisioning for new systems.
+
+# Create custom provisioning template
+hammer template create --name "RHEL8-Kickstart" \
+  --type provision \
+  --file - << 'EOF'
+#version=RHEL8
+# System authorization information
+auth --enableshadow --passalgo=sha512
+
+# Use network installation
+url --url="http://satellite.example.com/pulp/repos/Example_Organization/Library/content/dist/rhel8/8/x86_64/baseos/os"
+
+# Keyboard layouts
+keyboard --vckeymap=us --xlayouts='us'
+
+# System language
+lang en_US.UTF-8
+
+# Network information
+network --bootproto=dhcp --device=eth0 --onboot=on --activate
+
+# Root password
+rootpw --iscrypted $6$rounds=4096$salt$hashedpassword
+
+# System services
+services --enabled="chronyd"
+
+# System timezone
+timezone America/New_York --isUtc
+
+# Partition clearing information
+clearpart --none --initlabel
+
+# Disk partitioning information
+autopart --type=lvm
+
+%packages
+@^minimal-environment
+chrony
+katello-ca-consumer-satellite.example.com
+subscription-manager
+%end
+
+%post --log=/root/ks-post.log
+# Register with Satellite
+subscription-manager register --org="Example_Organization" --activationkey="ak-rhel8-dev"
+
+# Install and configure Puppet
+dnf install -y puppet-agent
+echo "server = satellite.example.com" >> /etc/puppetlabs/puppet/puppet.conf
+systemctl enable puppet
+systemctl start puppet
+%end
+EOF
+Task 3: Implement Backup, Recovery, and Monitoring Strategies
+Subtask 3.1: Configure Satellite Backup
+Set up comprehensive backup strategies for the Satellite server.
+
+# Install backup utilities
+dnf install -y satellite-maintain
+
+# Create backup directory
+mkdir -p /backup/satellite
+
+# Create backup script
+cat > /root/satellite_backup.sh << 'EOF'
+#!/bin/bash
+
+BACKUP_DIR="/backup/satellite"
+DATE=$(date +%Y%m%d_%H%M%S)
+BACKUP_PATH="${BACKUP_DIR}/satellite_backup_${DATE}"
+
+# Create backup directory
+mkdir -p ${BACKUP_PATH}
+
+# Perform offline backup
+satellite-maintain backup offline ${BACKUP_PATH}
+
+# Compress backup
+tar -czf ${BACKUP_PATH}.tar.gz -C ${BACKUP_DIR} satellite_backup_${DATE}
+
+# Remove uncompressed backup
+rm -rf ${BACKUP_PATH}
+
+# Keep only last 7 backups
+find ${BACKUP_DIR} -name "satellite_backup_*.tar.gz" -mtime +7 -delete
+
+echo "Backup completed: ${BACKUP_PATH}.tar.gz"
+EOF
+
+chmod +x /root/satellite_backup.sh
+
+# Schedule daily backups
+echo "0 2 * * * /root/satellite_backup.sh" | crontab -
+Subtask 3.2: Configure Database Backup
+Set up PostgreSQL database backup procedures.
+
+# Create database backup script
+cat > /root/db_backup.sh << 'EOF'
+#!/bin/bash
+
+BACKUP_DIR="/backup/database"
+DATE=$(date +%Y%m%d_%H%M%S)
+
+mkdir -p ${BACKUP_DIR}
+
+# Backup Foreman database
+sudo -u postgres pg_dump foreman > ${BACKUP_DIR}/foreman_${DATE}.sql
+
+# Backup Candlepin database
+sudo -u postgres pg_dump candlepin > ${BACKUP_DIR}/candlepin_${DATE}.sql
+
+# Backup Pulp database
+sudo -u postgres pg_dump pulpcore > ${BACKUP_DIR}/pulpcore_${DATE}.sql
+
+# Compress backups
+gzip ${BACKUP_DIR}/*_${DATE}.sql
+
+# Keep only last 14 days
+find ${BACKUP_DIR} -name "*.sql.gz" -mtime +14 -delete
+
+echo "Database backups completed for ${DATE}"
+EOF
+
+chmod +x /root/db_backup.sh
+
+# Schedule database backups
+echo "30 1 * * * /root/db_backup.sh" | crontab -l | { cat; echo "30 1 * * * /root/db_backup.sh"; } | crontab -
+Subtask 3.3: Set Up Recovery Procedures
+Create recovery procedures and test restoration processes.
+
+# Create recovery script
+cat > /root/satellite_recovery.sh << 'EOF'
+#!/bin/bash
+
+if [ $# -ne 1 ]; then
+    echo "Usage: $0 <backup_file.tar.gz>"
+    exit 1
+fi
+
+BACKUP_FILE=$1
+RESTORE_DIR="/tmp/satellite_restore"
+
+# Extract backup
+mkdir -p ${RESTORE_DIR}
+tar -xzf ${BACKUP_FILE} -C ${RESTORE_DIR}
+
+# Stop Satellite services
+satellite-maintain service stop
+
+# Restore from backup
+satellite-maintain restore ${RESTORE_DIR}/satellite_backup_*
+
+# Start services
+satellite-maintain service start
+
+echo "Recovery completed from ${BACKUP_FILE}"
+EOF
+
+chmod +x /root/satellite_recovery.sh
+
+# Create recovery documentation
+cat > /root/RECOVERY_PROCEDURES.md << 'EOF'
+# Satellite Recovery Procedures
+
+## Full System Recovery
+1. Install fresh RHEL system
+2. Install Satellite packages
+3. Run recovery script: `/root/satellite_recovery.sh <backup_file>`
+
+## Database Recovery
+1. Stop Satellite services: `satellite-maintain service stop`
+2. Restore databases from SQL dumps
+3. Start services: `satellite-maintain service start`
+
+## Configuration Recovery
+- SSL certificates: `/root/ssl-build/`
+- Custom configurations: `/etc/foreman/`
+- Puppet modules: `/etc/puppetlabs/code/`
+EOF
+Subtask 3.4: Implement Monitoring and Alerting
+Set up comprehensive monitoring for the Satellite infrastructure.
+
+# Install monitoring tools
+dnf install -y nagios-plugins-all
+
+# Create system monitoring script
+cat > /root/satellite_monitor.sh << 'EOF'
+#!/bin/bash
+
+LOG_FILE="/var/log/satellite_monitor.log"
+DATE=$(date '+%Y-%m-%d %H:%M:%S')
+
+# Function to log messages
+log_message() {
+    echo "[$DATE] $1" >> $LOG_FILE
+}
+
+# Check Satellite services
+SERVICES=("httpd" "postgresql" "pulpcore-worker@1" "pulpcore-worker@2" "redis" "foreman")
+
+for service in "${SERVICES[@]}"; do
+    if systemctl is-active --quiet $service; then
+        log_message "OK: $service is running"
+    else
+        log_message "CRITICAL: $service is not running"
+        # Send alert (configure email/notification here)
+    fi
+done
+
+# Check disk space
+DISK_USAGE=$(df /var | awk 'NR==2 {print $5}' | sed 's/%//')
+if [ $DISK_USAGE -gt 80 ]; then
+    log_message "WARNING: Disk usage is ${DISK_USAGE}%"
+fi
+
+# Check database connections
+DB_CONNECTIONS=$(sudo -u postgres psql -t -c "SELECT count(*) FROM pg_stat_activity;" foreman)
+log_message "INFO: Database connections: $DB_CONNECTIONS"
+
+# Check content synchronization status
+SYNC_STATUS=$(hammer repository list --organization "Example Organization" --fields "Name,Last sync" | grep -c "Success")
+log_message "INFO: Successful repository syncs: $SYNC_STATUS"
+EOF
+
+chmod +x /root/satellite_monitor.sh
+
+# Schedule monitoring
+echo "*/5 * * * * /root/satellite_monitor.sh" | crontab -l | { cat; echo "*/5 * * * * /root/satellite_monitor.sh"; } | crontab -
+Subtask 3.5: Configure Performance Monitoring
+Set up performance monitoring and optimization.
+
+# Create performance monitoring script
+cat > /root/performance_monitor.sh << 'EOF'
+#!/bin/bash
+
+PERF_LOG="/var/log/satellite_performance.log"
+DATE=$(date '+%Y-%m-%d %H:%M:%S')
+
+# System performance metrics
+CPU_USAGE=$(top -bn1 | grep "Cpu(s)" | awk '{print $2}' | sed 's/%us,//')
+MEMORY_USAGE=$(free | grep Mem | awk '{printf "%.2f", $3/$2 * 100.0}')
+LOAD_AVERAGE=$(uptime | awk -F'load average:' '{print $2}')
+
+# Database performance
+DB_SIZE=$(sudo -u postgres psql -t -c "SELECT pg_size_pretty(pg_database_size('foreman'));" foreman | xargs)
+DB_CONNECTIONS=$(sudo -u postgres psql -t -c "SELECT count(*) FROM pg_stat_activity;" foreman | xargs)
+
+# Log performance metrics
+echo "[$DATE] CPU: ${CPU_USAGE}%, Memory: ${MEMORY_USAGE}%, Load: ${LOAD_AVERAGE}" >> $PERF_LOG
+echo "[$DATE] DB Size: $DB_SIZE, DB Connections: $DB_CONNECTIONS" >> $PERF_LOG
+
+# Check for performance issues
+if (( $(echo "$MEMORY_USAGE > 90" | bc -l) )); then
+    echo "[$DATE] ALERT: High memory usage: ${MEMORY_USAGE}%" >> $PERF_LOG
+fi
+EOF
+
+chmod +x /root/performance_monitor.sh
+
+# Schedule performance monitoring
+echo "0 * * * * /root/performance_monitor.sh" | crontab -l | { cat; echo "0 * * * * /root/performance_monitor.sh"; } | crontab -
+Task 4: Advanced Configuration and Optimization
+Subtask 4.1: Configure Content Management at Scale
+Set up efficient content management for large-scale deployments.
+
+# Create composite content views for complex environments
+hammer content-view create --name "RHEL8-Complete" --composite --organization "Example Organization"
+
+# Add component content views
+hammer content-view component add --composite-content-view "RHEL8-Complete" \
+  --component-content-view "RHEL8-Base" --latest --organization "Example Organization"
+
+hammer content-view component add --composite-content-view "RHEL8-Complete" \
+  --component-content-view "RHEL8-AppStream" --latest --organization "Example Organization"
+
+# Publish composite content view
+hammer content-view publish --name "RHEL8-Complete" --organization "Example Organization"
+
+# Promote to environments
+hammer content-view version promote --content-view "RHEL8-Complete" \
+  --to-lifecycle-environment "Development" --organization "Example Organization"
+Subtask 4.2: Implement Role-Based Access Control
+Configure RBAC for team-based management.
+
+# Create custom roles
+hammer role create --name "Content Manager"
+hammer role create --name "System Administrator"
+hammer role create --name "Read Only User"
+
+# Add permissions to Content Manager role
+hammer filter create --role "Content Manager" --permissions "view_products,create_products,edit_products,destroy_products"
+hammer filter create --role "Content Manager" --permissions "view_content_views,create_content_views,edit_content_views,publish_content_views"
+
+# Create user groups
+hammer user-group create --name "Content Team" --role "Content Manager"
+hammer user-group create --name "System Admins" --role "System Administrator"
+hammer user-group create --name "Viewers" --role "Read Only User"
+
+# Create users and assign to groups
+hammer user create --login "content_admin" --password "redhat123" \
+  --mail "content@example.com" --firstname "Content" --lastname "Admin"
+hammer user-group add-user --name "Content Team" --user "content_admin"
+Subtask 4.3: Configure High Availability Considerations
+Set up configurations for high availability scenarios.
+
+# Configure load balancer health checks
+cat > /var/www/html/pub/health_check.php << 'EOF'
+<?php
+// Simple health check for load balancer
+$services = array('httpd', 'postgresql', 'pulpcore-worker@1');
+$status = 'OK';
+
+foreach ($services as $service) {
+    $output = shell_exec("systemctl is-active $service");
+    if (trim($output) !== 'active') {
+        $status = 'FAIL';
+        break;
+    }
+}
+
+header('Content-Type: application/json');
+echo json_encode(array('status' => $status, 'timestamp' => date('c')));
+?>
+EOF
+
+# Configure database connection pooling
+cat >> /etc/foreman/database.yml << 'EOF'
+production:
+  pool: 25
+  timeout: 5000
+  checkout_timeout: 5
+EOF
+
+# Optimize PostgreSQL for high load
+cat >> /var/lib/pgsql/data/postgresql.conf << 'EOF'
+# Performance tuning for Satellite
+shared_buffers = 1GB
+effective_cache_size = 3GB
+work_mem = 16MB
+maintenance_work_mem = 256MB
+max_connections = 200
+EOF
+
+systemctl restart postgresql
+Verification and Testing
+Subtask 4.4: Verify Complete Deployment
+Test all components of the scaled Satellite deployment.
+
+# Verify client registrations
+hammer host list --organization "Example Organization"
+
+# Check content view publications
+hammer content-view list --organization "Example Organization"
+
+# Verify lifecycle environments
+hammer lifecycle-environment list --organization "Example Organization"
+
+# Test remote execution
+hammer job-invocation create --job-template "Run Command - SSH Default" \
+  --inputs "command=uptime" --search-query "name ~ client"
+
+# Verify backup functionality
+/root/satellite_backup.sh
+
+# Check monitoring logs
+tail -f /var/log/satellite_monitor.log
+
+# Verify performance monitoring
+tail -f /var/log/satellite_performance.log
+Subtask 4.5: Performance Testing
+Conduct performance tests to ensure scalability.
+
+# Create performance test script
+cat > /root/performance_test.sh << 'EOF'
+#!/bin/bash
+
+echo "Starting Satellite performance test..."
+
+# Test concurrent API calls
+for i in {1..10}; do
+    (
+        hammer host list --organization "Example Organization" > /dev/null 2>&1
+        echo "API test $i completed"
+    ) &
+done
+wait
+
+# Test content synchronization performance
+START_TIME=$(date +%s)
+hammer repository synchronize --name "Red Hat Enterprise Linux 8 for x86_64 - BaseOS RPMs 8" \
+  --organization "Example Organization" --product "Red Hat Enterprise Linux for x86_64"
+END_TIME=$(date +%s)
+SYNC_DURATION=$((END_TIME - START_TIME))
+
+echo "Content sync completed in $SYNC_DURATION seconds"
+
+# Test bulk operations
+hammer job-invocation create --job-template "Run Command - SSH Default" \
+  --inputs "command=echo 'Performance test'" --search-query "lifecycle_environment = Development"
+
+echo "Performance test completed"
+EOF
+
+chmod +x /root/performance_test.sh
+/root/performance_test.sh
+Troubleshooting Common Issues
+Common Issue 1: Service Startup Problems
+# Check service status
+satellite-maintain service status
+
+# Restart all services
+satellite-maintain service restart
+
+# Check logs for errors
+journalctl -u httpd -f
+journalctl -u postgresql -f
+Common Issue 2: Database Connection Issues
+# Check database connectivity
+sudo -u postgres psql -c "\l"
+
+# Verify database configuration
+satellite-maintain advanced procedure run packages-lock
+satellite-maintain advanced procedure run packages-unlock
+Common Issue 3: Content Synchronization Problems
+# Check repository sync status
+hammer repository list --organization "Example Organization"
+
+# Force repository sync
+hammer repository synchronize --name "repository-name" --organization "Example Organization"
+
+# Check sync logs
+tail -f /var/log/messages | grep pulp
+Conclusion
+Congratulations! You have successfully completed the final project for deploying and managing Red Hat Satellite at scale. Throughout this comprehensive lab, you have accomplished several critical objectives:
+
+What You've Accomplished:
+
+Enterprise-Scale Deployment: You've successfully installed and configured a complete Satellite server environment capable of managing multiple systems across different lifecycle environments.
+
+Automated Management: You've implemented automated host registration, patching workflows, and provisioning templates that enable efficient management of large-scale infrastructure.
+
+Business Continuity: You've established comprehensive backup and recovery strategies, ensuring your Satellite infrastructure can be restored in case of failures.
+
+Proactive Monitoring: You've deployed monitoring and alerting systems that provide visibility into system health and performance metrics.
+
+Scalability Considerations: You've configured advanced features like composite content views, role-based access control, and performance optimizations for enterprise environments.
+
+Why This Matters:
+
+This lab represents real-world enterprise infrastructure management scenarios. The skills you've developed are directly applicable to:
+
+Enterprise System Administration: Managing hundreds or thousands of Red Hat systems efficiently
+DevOps and Automation: Implementing infrastructure as code and auto
