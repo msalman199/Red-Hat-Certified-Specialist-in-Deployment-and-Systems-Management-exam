@@ -1,0 +1,379 @@
+Lab: Managing and Automating System Patching
+Objectives
+By the end of this lab, students will be able to:
+
+Configure automated system patching schedules using DNF automatic and systemd timers
+Automate patching across multiple Linux systems using Ansible
+Validate patching operations through system logs and generated reports
+Troubleshoot common patching issues in an automated patch management pipeline
+Prerequisites
+Before starting this lab, students should have:
+
+Basic understanding of Linux system administration
+Familiarity with command-line interface operations
+Knowledge of package management systems (dnf/yum)
+Basic knowledge of shell scripting
+Familiarity with systemd services and timers
+This lab is designed to run on a single CentOS/RHEL 8 (or compatible, e.g. Rocky Linux 8 / AlmaLinux 8) machine acting as both the management node and the target of local Ansible runs. All work is performed inside your own isolated practice environment.
+
+Install the required tools before starting:
+
+sudo dnf install -y ansible dnf-automatic bc
+Verify the installation:
+
+ansible --version
+rpm -q dnf-automatic
+Expected output: ansible prints a version string (2.9 or later), and rpm -q dnf-automatic returns a package name/version line rather than "package is not installed."
+
+Task 1: Configure Automated Patching Schedules
+Subtask 1.1: Configure DNF Automatic
+Back up and edit the DNF automatic configuration:
+sudo cp /etc/dnf/automatic.conf /etc/dnf/automatic.conf.bak
+sudo nano /etc/dnf/automatic.conf
+Set the following key values in the [commands] and [emitters] sections (leave the rest of the file at defaults):
+[commands]
+upgrade_type = default
+random_sleep = 0
+network_online_timeout = 60
+download_updates = yes
+apply_updates = yes
+
+[emitters]
+emit_via = stdio
+
+[base]
+debuglevel = 1
+Enable and start the timer:
+sudo systemctl enable --now dnf-automatic.timer
+systemctl status dnf-automatic.timer --no-pager
+systemctl list-timers dnf-automatic.timer --no-pager
+Deliverable: systemctl list-timers dnf-automatic.timer shows a row with a populated NEXT and LEFT column for dnf-automatic.timer, confirming the timer is scheduled. systemctl status dnf-automatic.timer reports Active: active (waiting).
+
+Subtask 1.2: Create a Custom Weekly Security-Update Timer
+Create the service unit:
+sudo tee /etc/systemd/system/security-updates.service > /dev/null << 'EOF'
+[Unit]
+Description=Security Updates Service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/security-update.sh
+User=root
+StandardOutput=journal
+StandardError=journal
+EOF
+Create the timer unit:
+sudo tee /etc/systemd/system/security-updates.timer > /dev/null << 'EOF'
+[Unit]
+Description=Weekly Security Updates Timer
+Requires=security-updates.service
+
+[Timer]
+OnCalendar=Sun 02:00
+Persistent=true
+RandomizedDelaySec=1800
+
+[Install]
+WantedBy=timers.target
+EOF
+Create the security update script:
+sudo tee /usr/local/bin/security-update.sh > /dev/null << 'EOF'
+#!/bin/bash
+
+LOG_FILE="/var/log/security-updates.log"
+DATE=$(date '+%Y-%m-%d %H:%M:%S')
+
+echo "[$DATE] Starting security updates..." >> "$LOG_FILE"
+
+dnf --security update -y >> "$LOG_FILE" 2>&1
+
+if [ $? -eq 0 ]; then
+    echo "[$DATE] Security updates completed successfully" >> "$LOG_FILE"
+else
+    echo "[$DATE] Security updates failed" >> "$LOG_FILE"
+fi
+
+echo "[$DATE] Security update process finished" >> "$LOG_FILE"
+EOF
+sudo chmod +x /usr/local/bin/security-update.sh
+Enable the timer and confirm it is scheduled:
+sudo systemctl daemon-reload
+sudo systemctl enable --now security-updates.timer
+systemctl list-timers security-updates.timer --no-pager
+Deliverable: systemctl list-timers security-updates.timer shows the timer with a NEXT run scheduled for the upcoming Sunday at 02:00 (plus up to 30 minutes of randomized delay). Run sudo systemctl start security-updates.service manually once to trigger the script immediately, then confirm log entries exist:
+
+sudo systemctl start security-updates.service
+cat /var/log/security-updates.log
+Expected output: two or more timestamped lines showing "Starting security updates..." and "...process finished".
+
+Task 2: Automate Patching with Ansible
+Subtask 2.1: Configure Ansible for Local Management
+Create the Ansible working directory and inventory:
+mkdir -p ~/patch-lab/playbooks
+cat > ~/patch-lab/inventory.ini << 'EOF'
+[patch_targets]
+localhost ansible_connection=local
+EOF
+Verify Ansible can reach the target:
+ansible -i ~/patch-lab/inventory.ini patch_targets -m ping
+Expected output: localhost | SUCCESS => { "changed": false, "ping": "pong" }.
+
+Note: This lab uses localhost with a local connection to keep the environment self-contained. In a real deployment, you would replace this with the actual hostnames or IP addresses of remote systems and use SSH key-based authentication (ansible_user, ansible_ssh_private_key_file) instead of a local connection.
+
+Subtask 2.2: Create a Patch Management Playbook
+Create the playbook file:
+cat > ~/patch-lab/playbooks/system-patching.yml << 'EOF'
+---
+- name: Automated System Patching
+  hosts: patch_targets
+  become: yes
+  gather_facts: yes
+
+  vars:
+    patch_log_dir: "/var/log/ansible-patching"
+
+  pre_tasks:
+    - name: Create patch log directory
+      file:
+        path: "{{ patch_log_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Record pre-patch system state
+      shell: |
+        echo "=== Pre-Patch System State ===" > {{ patch_log_dir }}/pre-patch-{{ ansible_date_time.epoch }}.log
+        uname -a >> {{ patch_log_dir }}/pre-patch-{{ ansible_date_time.epoch }}.log
+        df -h >> {{ patch_log_dir }}/pre-patch-{{ ansible_date_time.epoch }}.log
+      args:
+        creates: "{{ patch_log_dir }}/pre-patch-{{ ansible_date_time.epoch }}.log"
+
+  tasks:
+    - name: Check available security updates
+      command: dnf --security check-update
+      register: security_check
+      changed_when: false
+      failed_when: security_check.rc not in [0, 100]
+
+    - name: Apply security updates
+      dnf:
+        name: "*"
+        state: latest
+        security: yes
+      register: security_updates
+
+    - name: Check if a reboot is required
+      shell: |
+        needs-restarting -r
+      register: reboot_check
+      changed_when: false
+      failed_when: reboot_check.rc not in [0, 1]
+
+  post_tasks:
+    - name: Record post-patch system state
+      shell: |
+        echo "=== Post-Patch System State ===" > {{ patch_log_dir }}/post-patch-{{ ansible_date_time.epoch }}.log
+        uname -a >> {{ patch_log_dir }}/post-patch-{{ ansible_date_time.epoch }}.log
+        df -h >> {{ patch_log_dir }}/post-patch-{{ ansible_date_time.epoch }}.log
+
+    - name: Display patch summary
+      debug:
+        msg: "Security updates changed: {{ security_updates.changed }}, reboot required: {{ reboot_check.rc == 1 }}"
+EOF
+Note: needs-restarting -r is provided by the dnf-utils (yum-utils) package; install it with sudo dnf install -y dnf-utils if it is not already present. It returns exit code 1 when a reboot is required and 0 otherwise.
+
+Run the playbook:
+ansible-playbook -i ~/patch-lab/inventory.ini ~/patch-lab/playbooks/system-patching.yml
+Deliverable: The play completes with a PLAY RECAP line showing localhost with failed=0. The debug task prints a message showing whether updates changed the system and whether a reboot is required. Confirm the log files were created:
+
+sudo ls -la /var/log/ansible-patching/
+Expected output: a pre-patch-<epoch>.log and post-patch-<epoch>.log file pair, each containing uname -a and df -h output.
+
+Task 3: Validate Patching with Logs and Reports
+Subtask 3.1: Create a Validation Script
+Create the validation script:
+sudo tee /usr/local/bin/validate-patching.sh > /dev/null << 'EOF'
+#!/bin/bash
+
+VALIDATION_LOG="/var/log/patch-validation.log"
+DATE=$(date '+%Y-%m-%d %H:%M:%S')
+FAILED_CHECKS=0
+
+log_result() {
+    echo "[$DATE] $1" | tee -a "$VALIDATION_LOG"
+}
+
+check_disk_space() {
+    log_result "=== Disk Space Check ==="
+    disk_usage=$(df / | awk 'NR==2 {print $5}' | sed 's/%//')
+    if [ "$disk_usage" -gt 90 ]; then
+        log_result "WARNING: High disk usage: ${disk_usage}%"
+        FAILED_CHECKS=$((FAILED_CHECKS + 1))
+    else
+        log_result "OK: Disk usage normal: ${disk_usage}%"
+    fi
+}
+
+check_services() {
+    log_result "=== Service Status Check ==="
+    critical_services=("sshd" "systemd-logind")
+
+    for service in "${critical_services[@]}"; do
+        if systemctl is-active --quiet "$service"; then
+            log_result "OK: $service is running"
+        else
+            log_result "ERROR: $service is not running"
+            FAILED_CHECKS=$((FAILED_CHECKS + 1))
+        fi
+    done
+}
+
+check_security_updates() {
+    log_result "=== Security Updates Check ==="
+    dnf --security check-update > /tmp/sec-check.out 2>&1
+    rc=$?
+    if [ $rc -eq 100 ]; then
+        pending=$(grep -c '^[a-zA-Z0-9]' /tmp/sec-check.out || true)
+        log_result "WARNING: security updates appear available (exit code 100)"
+        FAILED_CHECKS=$((FAILED_CHECKS + 1))
+    elif [ $rc -eq 0 ]; then
+        log_result "OK: No pending security updates"
+    else
+        log_result "ERROR: dnf check-update failed with exit code $rc"
+        FAILED_CHECKS=$((FAILED_CHECKS + 1))
+    fi
+}
+
+generate_summary() {
+    log_result "=== Validation Summary ==="
+    log_result "Total failed checks: $FAILED_CHECKS"
+    if [ "$FAILED_CHECKS" -eq 0 ]; then
+        log_result "RESULT: All validations passed"
+    else
+        log_result "RESULT: $FAILED_CHECKS validation(s) failed"
+    fi
+}
+
+log_result "Starting post-patch validation"
+check_disk_space
+check_services
+check_security_updates
+generate_summary
+
+exit $FAILED_CHECKS
+EOF
+sudo chmod +x /usr/local/bin/validate-patching.sh
+Run the validation script:
+sudo /usr/local/bin/validate-patching.sh
+echo "Exit code: $?"
+Deliverable: The console and /var/log/patch-validation.log show four sections (Disk Space Check, Service Status Check, Security Updates Check, Validation Summary) each ending in OK, WARNING, or ERROR lines, followed by a RESULT line. The exit code equals the number of failed checks reported in the summary (0 if everything passed).
+
+Subtask 3.2: Generate a Patch Report
+Create the reporting script:
+sudo tee /usr/local/bin/generate-patch-report.sh > /dev/null << 'EOF'
+#!/bin/bash
+
+REPORT_DIR="/var/reports/patching"
+DATE=$(date '+%Y-%m-%d')
+REPORT_FILE="$REPORT_DIR/patch-report-$DATE.html"
+
+mkdir -p "$REPORT_DIR"
+
+TOTAL_PACKAGES=$(rpm -qa | wc -l)
+SECURITY_OUTPUT=$(dnf --security check-update 2>&1)
+SECURITY_RC=$?
+if [ $SECURITY_RC -eq 100 ]; then
+    SECURITY_STATUS="Updates available"
+elif [ $SECURITY_RC -eq 0 ]; then
+    SECURITY_STATUS="No pending security updates"
+else
+    SECURITY_STATUS="Check failed (exit code $SECURITY_RC)"
+fi
+
+cat > "$REPORT_FILE" << HTML
+<!DOCTYPE html>
+<html>
+<head>
+    <title>System Patching Report - $DATE</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .header { background-color: #2c3e50; color: white; padding: 20px; border-radius: 5px; }
+        .section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }
+        table { border-collapse: collapse; width: 100%; margin: 10px 0; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>System Patching Report</h1>
+        <p>Generated on: $(date)</p>
+        <p>Hostname: $(hostname)</p>
+    </div>
+    <div class="section">
+        <h2>System Information</h2>
+        <table>
+            <tr><th>Property</th><th>Value</th></tr>
+            <tr><td>Kernel Version</td><td>$(uname -r)</td></tr>
+            <tr><td>Architecture</td><td>$(uname -m)</td></tr>
+            <tr><td>Uptime</td><td>$(uptime -p)</td></tr>
+        </table>
+    </div>
+    <div class="section">
+        <h2>Patch Statistics</h2>
+        <p>Total installed packages: $TOTAL_PACKAGES</p>
+        <p>Security update status: $SECURITY_STATUS</p>
+    </div>
+    <div class="section">
+        <h2>Latest Validation Log</h2>
+        <pre>
+$(tail -30 /var/log/patch-validation.log 2>/dev/null || echo "No validation log available yet.")
+        </pre>
+    </div>
+</body>
+</html>
+HTML
+
+echo "Report generated: $REPORT_FILE"
+EOF
+sudo chmod +x /usr/local/bin/generate-patch-report.sh
+Run the reporting script and inspect the result:
+sudo /usr/local/bin/generate-patch-report.sh
+cat /var/reports/patching/patch-report-$(date '+%Y-%m-%d').html | head -20
+Deliverable: The script prints Report generated: /var/reports/patching/patch-report-<date>.html, and the file exists containing valid HTML with populated System Information, Patch Statistics, and Latest Validation Log sections.
+
+Subtask 3.3: Run and Verify the Complete Workflow
+Execute the full workflow end to end in sequence:
+sudo /usr/local/bin/validate-patching.sh
+VALIDATION_RC=$?
+
+ansible-playbook -i ~/patch-lab/inventory.ini ~/patch-lab/playbooks/system-patching.yml
+ANSIBLE_RC=$?
+
+sudo /usr/local/bin/validate-patching.sh
+sudo /usr/local/bin/generate-patch-report.sh
+
+echo "Initial validation exit code: $VALIDATION_RC"
+echo "Ansible playbook exit code: $ANSIBLE_RC"
+Confirm every artifact produced by the workflow exists:
+sudo ls -la /var/log/ansible-patching/
+sudo tail -20 /var/log/patch-validation.log
+sudo ls -la /var/reports/patching/
+Expected output: ANSIBLE_RC is 0, the /var/log/ansible-patching/ directory contains matching pre-patch and post-patch log pairs, /var/log/patch-validation.log contains at least two full validation runs (each ending with a RESULT line), and /var/reports/patching/ contains an HTML report dated today.
+
+Troubleshooting this step:
+
+If ansible-playbook fails at the "Apply security updates" task with a permission error, confirm you are running the command as a user with passwordless sudo, or add --ask-become-pass and supply the sudo password when prompted.
+If dnf --security check-update always exits 0 even though updates are known to be available, confirm the system has any enabled repositories providing updates (dnf repolist); a system with no update-providing repos will always report no security updates.
+Deliverable: A completed end-to-end run showing exit code 0 from the Ansible playbook, at least two validation log entries, and one HTML report file, demonstrating that scheduling, automated patch application, and validation/reporting all function together correctly.
+
+Expected Outcomes
+A working dnf-automatic.timer and custom security-updates.timer scheduled and verified with systemctl list-timers
+A functioning Ansible playbook that checks for, applies, and logs security updates with pre- and post-patch system state captured
+A validation script and HTML reporting script that together confirm system health and produce an auditable record of each patch cycle
+Troubleshooting
+Timer never fires or shows no NEXT value: Run systemctl status <timer-name> to check for enable --now errors, and confirm the system clock and timezone are correct with timedatectl, since OnCalendar schedules are time-zone dependent.
+Ansible playbook fails at the dnf module task with a "Failed to synchronize cache" error: Check network/repository connectivity with dnf repolist on the target host; the dnf Ansible module requires the same repo access as the command line dnf tool.
+Conclusion
+In this lab, you built a small but complete automated patch management pipeline: scheduled security updates using both dnf-automatic and a custom systemd timer, automated patch application and system-state logging with an Ansible playbook, and validated the results with a health-check script and an HTML reporting tool. Together these pieces demonstrate the core enterprise patching pattern of schedule, apply, validate, and report, which is essential for maintaining security compliance while minimizing unplanned downtime. In a production environment, these same techniques would be extended with a real inventory of remote hosts, staged rollouts across environments (development before production), enforced maintenance windows, and automated rollback procedures triggered by failed validation checks.
