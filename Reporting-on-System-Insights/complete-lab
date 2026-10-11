@@ -1,0 +1,600 @@
+Lab 13: Reporting on System Insights
+Objectives
+By the end of this lab, students will be able to:
+
+Generate comprehensive compliance and patch level reports using Red Hat Satellite
+Implement configuration drift detection using integrated monitoring tools
+Create custom reports for system performance analysis and patch management
+Understand the importance of system reporting in enterprise environments
+Utilize open-source tools for system insights and reporting automation
+Prerequisites
+Before starting this lab, students should have:
+
+Basic understanding of Linux system administration
+Familiarity with Red Hat Enterprise Linux (RHEL) or CentOS
+Knowledge of package management concepts
+Understanding of system configuration files
+Basic command-line interface skills
+Completed previous labs in the Red Hat Satellite series
+Lab Environment Setup
+Ready-to-Use Cloud Machines: Al Nafi provides pre-configured Linux-based cloud machines for this lab. Simply click Start Lab to access your environment. No need to build your own virtual machines or install additional software.
+
+Your lab environment includes:
+
+Red Hat Satellite Server (or Foreman/Katello equivalent)
+Multiple managed client systems
+Pre-installed reporting tools and utilities
+Sample data for realistic reporting scenarios
+Task 1: Generate Compliance and Patch Level Reports in Satellite
+Subtask 1.1: Access Satellite Web Interface and Review System Status
+Connect to your Satellite server:
+
+# SSH to your Satellite server
+ssh root@satellite-server
+
+# Verify Satellite services are running
+systemctl status foreman
+systemctl status httpd
+systemctl status postgresql
+Access the web interface:
+
+Open your web browser
+Navigate to https://your-satellite-server.example.com
+Login with provided credentials
+Review registered systems:
+
+Navigate to Hosts → All Hosts
+Note the number of registered systems
+Check the last check-in times for each system
+Subtask 1.2: Generate System Compliance Reports
+Create a compliance policy:
+
+# Install OpenSCAP tools if not already present
+yum install -y scap-security-guide openscap-scanner
+
+# List available security profiles
+oscap info /usr/share/xml/scap/ssg/content/ssg-rhel8-ds.xml
+Configure compliance scanning in Satellite:
+
+Navigate to Hosts → Compliance → Policies
+Click New Compliance Policy
+Configure the following settings:
+Name: RHEL8-Security-Baseline
+Description: Security compliance for RHEL 8 systems
+SCAP Content: Select appropriate security guide
+XCCDF Profile: Choose security baseline profile
+Assign policy to host groups:
+
+Select target host groups or individual hosts
+Set scanning schedule (e.g., weekly)
+Save the policy configuration
+Generate compliance reports:
+
+# Trigger immediate compliance scan
+foreman-rake foreman_openscap:bulk_upload:default
+
+# Check scan results
+hammer host list --search "compliance_status = incompliant"
+Subtask 1.3: Create Patch Level Reports
+Update system package information:
+
+# On Satellite server, trigger package update collection
+hammer host bulk-action packages --organization "Default Organization" \
+  --host-ids 1,2,3 --packages-action update
+
+# Check errata information
+hammer erratum list --organization "Default Organization"
+Generate patch level reports:
+
+Navigate to Monitor → Reports → Host Reports
+Select Package Status Report
+Configure report parameters:
+Time Range: Last 30 days
+Host Groups: Select relevant groups
+Package Status: All packages
+Export patch reports:
+
+# Generate CSV report of package status
+hammer report-template generate --name "Host - Packages" \
+  --organization "Default Organization" \
+  --report-format csv > package_report.csv
+
+# View the generated report
+head -20 package_report.csv
+Task 2: Use Integrated Tools to Detect Configuration Drift
+Subtask 2.1: Install and Configure Configuration Management Tools
+Install Puppet agent on client systems:
+
+# On client systems
+yum install -y puppet-agent
+
+# Configure Puppet agent
+cat > /etc/puppetlabs/puppet/puppet.conf << EOF
+[main]
+certname = client1.example.com
+server = satellite-server.example.com
+environment = production
+runinterval = 1800
+EOF
+Set up baseline configuration:
+
+# Create a baseline configuration manifest
+mkdir -p /etc/puppetlabs/code/environments/production/manifests
+
+cat > /etc/puppetlabs/code/environments/production/manifests/site.pp << 'EOF'
+node default {
+  # Ensure critical services are running
+  service { 'sshd':
+    ensure => running,
+    enable => true,
+  }
+  
+  # Ensure security settings
+  file { '/etc/ssh/sshd_config':
+    ensure  => file,
+    mode    => '0600',
+    owner   => 'root',
+    group   => 'root',
+    content => template('ssh/sshd_config.erb'),
+  }
+  
+  # Package management
+  package { ['vim', 'wget', 'curl']:
+    ensure => installed,
+  }
+}
+EOF
+Subtask 2.2: Implement Configuration Drift Detection
+Create configuration monitoring script:
+
+cat > /usr/local/bin/config-drift-monitor.sh << 'EOF'
+#!/bin/bash
+
+# Configuration Drift Detection Script
+BASELINE_DIR="/var/lib/config-baseline"
+CURRENT_DIR="/tmp/current-config"
+REPORT_FILE="/var/log/config-drift-report.log"
+
+# Create directories
+mkdir -p $BASELINE_DIR $CURRENT_DIR
+
+# Function to capture current configuration
+capture_config() {
+    echo "Capturing current configuration..."
+    
+    # System configuration files
+    cp /etc/ssh/sshd_config $CURRENT_DIR/
+    cp /etc/sudoers $CURRENT_DIR/
+    cp /etc/passwd $CURRENT_DIR/
+    cp /etc/group $CURRENT_DIR/
+    
+    # Service status
+    systemctl list-units --state=running > $CURRENT_DIR/running_services.txt
+    
+    # Installed packages
+    rpm -qa | sort > $CURRENT_DIR/installed_packages.txt
+    
+    # Network configuration
+    ip addr show > $CURRENT_DIR/network_config.txt
+}
+
+# Function to compare configurations
+compare_config() {
+    echo "Comparing configurations..."
+    echo "Configuration Drift Report - $(date)" > $REPORT_FILE
+    echo "========================================" >> $REPORT_FILE
+    
+    for file in $CURRENT_DIR/*; do
+        filename=$(basename $file)
+        baseline_file="$BASELINE_DIR/$filename"
+        
+        if [ -f "$baseline_file" ]; then
+            if ! diff -q "$baseline_file" "$file" > /dev/null; then
+                echo "DRIFT DETECTED: $filename" >> $REPORT_FILE
+                echo "Differences:" >> $REPORT_FILE
+                diff "$baseline_file" "$file" >> $REPORT_FILE
+                echo "---" >> $REPORT_FILE
+            fi
+        else
+            echo "NEW FILE: $filename" >> $REPORT_FILE
+        fi
+    done
+}
+
+# Main execution
+capture_config
+
+# If baseline doesn't exist, create it
+if [ ! "$(ls -A $BASELINE_DIR)" ]; then
+    echo "Creating baseline configuration..."
+    cp -r $CURRENT_DIR/* $BASELINE_DIR/
+    echo "Baseline created. Run again to detect drift."
+else
+    compare_config
+    echo "Drift detection complete. Check $REPORT_FILE for results."
+fi
+EOF
+
+chmod +x /usr/local/bin/config-drift-monitor.sh
+Run configuration drift detection:
+
+# Create initial baseline
+/usr/local/bin/config-drift-monitor.sh
+
+# Make a configuration change to test drift detection
+echo "# Test comment for drift detection" >> /etc/ssh/sshd_config
+
+# Run drift detection again
+/usr/local/bin/config-drift-monitor.sh
+
+# View the drift report
+cat /var/log/config-drift-report.log
+Subtask 2.3: Set Up Automated Drift Monitoring
+Create systemd service for drift monitoring:
+
+cat > /etc/systemd/system/config-drift-monitor.service << 'EOF'
+[Unit]
+Description=Configuration Drift Monitor
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/config-drift-monitor.sh
+User=root
+
+[Install]
+WantedBy=multi-user.target
+EOF
+Create timer for regular monitoring:
+
+cat > /etc/systemd/system/config-drift-monitor.timer << 'EOF'
+[Unit]
+Description=Run Configuration Drift Monitor every 4 hours
+Requires=config-drift-monitor.service
+
+[Timer]
+OnCalendar=*-*-* 00,04,08,12,16,20:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+EOF
+
+# Enable and start the timer
+systemctl daemon-reload
+systemctl enable config-drift-monitor.timer
+systemctl start config-drift-monitor.timer
+
+# Check timer status
+systemctl list-timers config-drift-monitor.timer
+Task 3: Create Custom Reports on System Performance and Patch Levels
+Subtask 3.1: Develop System Performance Monitoring Scripts
+Create comprehensive system performance script:
+
+cat > /usr/local/bin/system-performance-report.sh << 'EOF'
+#!/bin/bash
+
+# System Performance Report Generator
+REPORT_DIR="/var/reports/performance"
+TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+REPORT_FILE="$REPORT_DIR/performance_report_$TIMESTAMP.txt"
+
+# Create report directory
+mkdir -p $REPORT_DIR
+
+# Function to generate performance report
+generate_performance_report() {
+    echo "System Performance Report - $(date)" > $REPORT_FILE
+    echo "============================================" >> $REPORT_FILE
+    echo "" >> $REPORT_FILE
+    
+    # System Information
+    echo "SYSTEM INFORMATION:" >> $REPORT_FILE
+    echo "Hostname: $(hostname)" >> $REPORT_FILE
+    echo "Uptime: $(uptime)" >> $REPORT_FILE
+    echo "Kernel: $(uname -r)" >> $REPORT_FILE
+    echo "" >> $REPORT_FILE
+    
+    # CPU Usage
+    echo "CPU USAGE:" >> $REPORT_FILE
+    echo "Current CPU usage:" >> $REPORT_FILE
+    top -bn1 | grep "Cpu(s)" >> $REPORT_FILE
+    echo "" >> $REPORT_FILE
+    echo "Load Average:" >> $REPORT_FILE
+    cat /proc/loadavg >> $REPORT_FILE
+    echo "" >> $REPORT_FILE
+    
+    # Memory Usage
+    echo "MEMORY USAGE:" >> $REPORT_FILE
+    free -h >> $REPORT_FILE
+    echo "" >> $REPORT_FILE
+    
+    # Disk Usage
+    echo "DISK USAGE:" >> $REPORT_FILE
+    df -h >> $REPORT_FILE
+    echo "" >> $REPORT_FILE
+    
+    # Network Statistics
+    echo "NETWORK STATISTICS:" >> $REPORT_FILE
+    cat /proc/net/dev >> $REPORT_FILE
+    echo "" >> $REPORT_FILE
+    
+    # Process Information
+    echo "TOP PROCESSES BY CPU:" >> $REPORT_FILE
+    ps aux --sort=-%cpu | head -10 >> $REPORT_FILE
+    echo "" >> $REPORT_FILE
+    
+    echo "TOP PROCESSES BY MEMORY:" >> $REPORT_FILE
+    ps aux --sort=-%mem | head -10 >> $REPORT_FILE
+    echo "" >> $REPORT_FILE
+    
+    # Service Status
+    echo "CRITICAL SERVICES STATUS:" >> $REPORT_FILE
+    for service in sshd httpd chronyd NetworkManager; do
+        if systemctl is-active --quiet $service; then
+            echo "$service: RUNNING" >> $REPORT_FILE
+        else
+            echo "$service: STOPPED" >> $REPORT_FILE
+        fi
+    done
+    echo "" >> $REPORT_FILE
+}
+
+# Generate the report
+generate_performance_report
+echo "Performance report generated: $REPORT_FILE"
+
+# Create symlink to latest report
+ln -sf $REPORT_FILE $REPORT_DIR/latest_performance_report.txt
+EOF
+
+chmod +x /usr/local/bin/system-performance-report.sh
+Create patch level analysis script:
+
+cat > /usr/local/bin/patch-level-report.sh << 'EOF'
+#!/bin/bash
+
+# Patch Level Report Generator
+REPORT_DIR="/var/reports/patches"
+TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+REPORT_FILE="$REPORT_DIR/patch_report_$TIMESTAMP.txt"
+
+# Create report directory
+mkdir -p $REPORT_DIR
+
+# Function to generate patch report
+generate_patch_report() {
+    echo "System Patch Level Report - $(date)" > $REPORT_FILE
+    echo "========================================" >> $REPORT_FILE
+    echo "" >> $REPORT_FILE
+    
+    # System Information
+    echo "SYSTEM INFORMATION:" >> $REPORT_FILE
+    echo "Hostname: $(hostname)" >> $REPORT_FILE
+    echo "OS Version: $(cat /etc/redhat-release)" >> $REPORT_FILE
+    echo "Kernel Version: $(uname -r)" >> $REPORT_FILE
+    echo "" >> $REPORT_FILE
+    
+    # Available Updates
+    echo "AVAILABLE UPDATES:" >> $REPORT_FILE
+    yum check-update > /tmp/updates_available.txt 2>&1
+    if [ $? -eq 100 ]; then
+        echo "Updates are available:" >> $REPORT_FILE
+        cat /tmp/updates_available.txt >> $REPORT_FILE
+    else
+        echo "System is up to date" >> $REPORT_FILE
+    fi
+    echo "" >> $REPORT_FILE
+    
+    # Security Updates
+    echo "SECURITY UPDATES:" >> $REPORT_FILE
+    yum --security check-update > /tmp/security_updates.txt 2>&1
+    if [ $? -eq 100 ]; then
+        echo "Security updates available:" >> $REPORT_FILE
+        cat /tmp/security_updates.txt >> $REPORT_FILE
+    else
+        echo "No security updates available" >> $REPORT_FILE
+    fi
+    echo "" >> $REPORT_FILE
+    
+    # Recently Installed Packages
+    echo "RECENTLY INSTALLED PACKAGES (Last 30 days):" >> $REPORT_FILE
+    rpm -qa --last | head -20 >> $REPORT_FILE
+    echo "" >> $REPORT_FILE
+    
+    # Package Count Summary
+    echo "PACKAGE SUMMARY:" >> $REPORT_FILE
+    echo "Total installed packages: $(rpm -qa | wc -l)" >> $REPORT_FILE
+    echo "Available updates: $(yum list updates 2>/dev/null | grep -v "Updated Packages" | grep -v "Available Upgrades" | wc -l)" >> $REPORT_FILE
+    echo "" >> $REPORT_FILE
+    
+    # Cleanup temporary files
+    rm -f /tmp/updates_available.txt /tmp/security_updates.txt
+}
+
+# Generate the report
+generate_patch_report
+echo "Patch report generated: $REPORT_FILE"
+
+# Create symlink to latest report
+ln -sf $REPORT_FILE $REPORT_DIR/latest_patch_report.txt
+EOF
+
+chmod +x /usr/local/bin/patch-level-report.sh
+Subtask 3.2: Create Automated Report Generation
+Set up automated report generation:
+
+# Create master reporting script
+cat > /usr/local/bin/generate-all-reports.sh << 'EOF'
+#!/bin/bash
+
+# Master Report Generation Script
+REPORT_BASE="/var/reports"
+TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
+SUMMARY_REPORT="$REPORT_BASE/summary_report_$TIMESTAMP.html"
+
+# Create base directory
+mkdir -p $REPORT_BASE
+
+echo "Generating comprehensive system reports..."
+
+# Generate individual reports
+/usr/local/bin/system-performance-report.sh
+/usr/local/bin/patch-level-report.sh
+/usr/local/bin/config-drift-monitor.sh
+
+# Create HTML summary report
+cat > $SUMMARY_REPORT << 'HTML_EOF'
+<!DOCTYPE html>
+<html>
+<head>
+    <title>System Insights Summary Report</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .header { background-color: #f0f0f0; padding: 10px; border-radius: 5px; }
+        .section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }
+        .critical { background-color: #ffebee; }
+        .warning { background-color: #fff3e0; }
+        .good { background-color: #e8f5e8; }
+        pre { background-color: #f5f5f5; padding: 10px; overflow-x: auto; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>System Insights Summary Report</h1>
+        <p>Generated on: $(date)</p>
+        <p>Hostname: $(hostname)</p>
+    </div>
+HTML_EOF
+
+# Add performance section
+echo '<div class="section">' >> $SUMMARY_REPORT
+echo '<h2>Performance Summary</h2>' >> $SUMMARY_REPORT
+echo '<pre>' >> $SUMMARY_REPORT
+head -30 /var/reports/performance/latest_performance_report.txt >> $SUMMARY_REPORT
+echo '</pre>' >> $SUMMARY_REPORT
+echo '</div>' >> $SUMMARY_REPORT
+
+# Add patch section
+echo '<div class="section">' >> $SUMMARY_REPORT
+echo '<h2>Patch Level Summary</h2>' >> $SUMMARY_REPORT
+echo '<pre>' >> $SUMMARY_REPORT
+head -30 /var/reports/patches/latest_patch_report.txt >> $SUMMARY_REPORT
+echo '</pre>' >> $SUMMARY_REPORT
+echo '</div>' >> $SUMMARY_REPORT
+
+# Close HTML
+echo '</body></html>' >> $SUMMARY_REPORT
+
+echo "Summary report generated: $SUMMARY_REPORT"
+
+# Create symlink to latest summary
+ln -sf $SUMMARY_REPORT $REPORT_BASE/latest_summary_report.html
+EOF
+
+chmod +x /usr/local/bin/generate-all-reports.sh
+Set up cron job for automated reporting:
+
+# Add cron job for daily report generation
+cat > /etc/cron.d/system-reports << 'EOF'
+# Generate system reports daily at 6 AM
+0 6 * * * root /usr/local/bin/generate-all-reports.sh > /var/log/report-generation.log 2>&1
+
+# Generate performance reports every 4 hours
+0 */4 * * * root /usr/local/bin/system-performance-report.sh > /dev/null 2>&1
+
+# Generate patch reports weekly on Sundays at 7 AM
+0 7 * * 0 root /usr/local/bin/patch-level-report.sh > /dev/null 2>&1
+EOF
+
+# Restart cron service
+systemctl restart crond
+systemctl enable crond
+Subtask 3.3: Test and Validate Custom Reports
+Generate test reports:
+
+# Run all report generation scripts
+/usr/local/bin/generate-all-reports.sh
+
+# Verify report files were created
+ls -la /var/reports/
+ls -la /var/reports/performance/
+ls -la /var/reports/patches/
+Review generated reports:
+
+# View performance report
+cat /var/reports/performance/latest_performance_report.txt
+
+# View patch report
+cat /var/reports/patches/latest_patch_report.txt
+
+# View configuration drift report
+cat /var/log/config-drift-report.log
+Set up web access to reports (optional):
+
+# Install and configure Apache for report viewing
+yum install -y httpd
+
+# Create web directory for reports
+mkdir -p /var/www/html/reports
+
+# Create symlinks to report directories
+ln -s /var/reports /var/www/html/reports/system-reports
+
+# Start and enable Apache
+systemctl start httpd
+systemctl enable httpd
+
+# Configure firewall if needed
+firewall-cmd --permanent --add-service=http
+firewall-cmd --reload
+
+echo "Reports accessible at: http://$(hostname)/reports/system-reports/"
+Troubleshooting Tips
+Common Issues and Solutions
+Satellite/Foreman connection issues:
+
+# Check service status
+systemctl status foreman
+systemctl status httpd
+
+# Restart services if needed
+systemctl restart foreman
+systemctl restart httpd
+Permission issues with report generation:
+
+# Ensure proper permissions
+chmod +x /usr/local/bin/*.sh
+chown root:root /usr/local/bin/*.sh
+
+# Create report directories with proper permissions
+mkdir -p /var/reports/{performance,patches}
+chmod 755 /var/reports
+Package update issues:
+
+# Clear yum cache
+yum clean all
+
+# Update package database
+yum makecache
+Configuration drift false positives:
+
+# Reset baseline after legitimate changes
+rm -rf /var/lib/config-baseline/*
+/usr/local/bin/config-drift-monitor.sh
+Conclusion
+In this lab, you have successfully accomplished the following key objectives:
+
+System Reporting Mastery: You learned to generate comprehensive compliance and patch level reports using Red Hat Satellite and open-source alternatives, providing crucial insights into your infrastructure's security posture and update status.
+
+Configuration Drift Detection: You implemented automated tools to detect and report configuration changes across your systems, helping maintain consistency and security in your environment.
+
+Custom Report Development: You created sophisticated custom reporting scripts that monitor system performance, patch levels, and configuration compliance, providing actionable insights for system administrators.
+
+Automation Implementation: You set up automated reporting schedules using systemd timers and cron jobs, ensuring continuous monitoring without manual intervention.
+
+Real-World Application: These skills are essential for enterprise system management, compliance auditing, and maintaining security standards in production environments.
+
+The reporting capabilities you've developed in this lab are fundamental to the Red Hat Certified Specialist in Deployment and Systems Management certification and provide practical skills for managing enterprise Linux environments. These tools help organizations maintain security compliance, track system health, and make informed decisions about system maintenance and updates.
+
+Your comprehensive reporting system now provides visibility into system status, security compliance, and performance metrics that are crucial for effective IT operations management.
