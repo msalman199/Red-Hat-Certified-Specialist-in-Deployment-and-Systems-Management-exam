@@ -1,0 +1,794 @@
+Lab 19: High Availability and Disaster Recovery in Satellite
+Objectives
+By the end of this lab, students will be able to:
+
+Configure Red Hat Satellite for high availability using multiple servers
+Implement disaster recovery procedures for Satellite infrastructure
+Set up automated backup and restoration processes
+Perform disaster recovery testing and validation
+Monitor and maintain high availability configurations
+Understand best practices for Satellite business continuity
+Prerequisites
+Before starting this lab, students should have:
+
+Basic understanding of Red Hat Satellite 6.x administration
+Knowledge of Linux system administration and networking concepts
+Familiarity with database management (PostgreSQL)
+Understanding of load balancing and clustering concepts
+Experience with backup and restoration procedures
+Access to multiple Linux systems for testing
+Lab Environment
+Al Nafi provides pre-configured Linux-based cloud machines for this lab. Simply click Start Lab to access your environment. No need to build your own VMs.
+
+Your lab environment includes:
+
+satellite-primary: Primary Satellite server (RHEL 8/9)
+satellite-secondary: Secondary Satellite server for HA (RHEL 8/9)
+satellite-capsule: Capsule server for load distribution (RHEL 8/9)
+backup-server: Dedicated backup server (RHEL 8/9)
+client-systems: Multiple client systems for testing (RHEL 8/9)
+Task 1: Configure Satellite for High Availability
+Subtask 1.1: Prepare the Environment
+First, let's verify our environment and prepare the systems for high availability configuration.
+
+Check system resources and connectivity:
+# On satellite-primary
+hostnamectl
+free -h
+df -h
+systemctl status satellite
+Verify network connectivity between servers:
+# Test connectivity from primary to secondary
+ping -c 3 satellite-secondary
+ping -c 3 satellite-capsule
+ping -c 3 backup-server
+
+# Check DNS resolution
+nslookup satellite-secondary
+nslookup satellite-capsule
+Ensure time synchronization across all servers:
+# Install and configure chrony on all servers
+sudo dnf install -y chrony
+sudo systemctl enable --now chronyd
+
+# Check time synchronization
+chrony sources -v
+timedatectl status
+Subtask 1.2: Configure Database High Availability
+Set up PostgreSQL streaming replication for database high availability.
+
+Configure PostgreSQL on the primary server:
+# Stop Satellite services
+sudo satellite-maintain service stop
+
+# Configure PostgreSQL for replication
+sudo -u postgres psql -c "CREATE USER replicator REPLICATION LOGIN ENCRYPTED PASSWORD 'replicator_password';"
+
+# Edit PostgreSQL configuration
+sudo vi /var/lib/pgsql/data/postgresql.conf
+Add these configurations to postgresql.conf:
+
+# Replication settings
+wal_level = replica
+max_wal_senders = 3
+max_replication_slots = 3
+archive_mode = on
+archive_command = 'cp %p /var/lib/pgsql/archive/%f'
+hot_standby = on
+Configure pg_hba.conf for replication:
+sudo vi /var/lib/pgsql/data/pg_hba.conf
+Add this line:
+
+host replication replicator satellite-secondary/32 md5
+Create archive directory and restart PostgreSQL:
+sudo mkdir -p /var/lib/pgsql/archive
+sudo chown postgres:postgres /var/lib/pgsql/archive
+sudo systemctl restart postgresql
+Subtask 1.3: Set Up Secondary Database Server
+Configure the secondary server as a PostgreSQL standby.
+
+Prepare the secondary server:
+# On satellite-secondary
+sudo dnf install -y postgresql-server postgresql-contrib
+
+# Stop PostgreSQL if running
+sudo systemctl stop postgresql
+
+# Remove default data directory
+sudo rm -rf /var/lib/pgsql/data/*
+Create base backup from primary:
+# On satellite-secondary
+sudo -u postgres pg_basebackup -h satellite-primary -D /var/lib/pgsql/data -U replicator -P -v -R -W
+Configure standby server:
+# Create recovery configuration
+sudo -u postgres vi /var/lib/pgsql/data/postgresql.conf
+Add these settings:
+
+hot_standby = on
+primary_conninfo = 'host=satellite-primary port=5432 user=replicator password=replicator_password'
+Start PostgreSQL on secondary:
+sudo systemctl enable --now postgresql
+
+# Verify replication status
+sudo -u postgres psql -c "SELECT * FROM pg_stat_replication;"
+Subtask 1.4: Configure Load Balancer
+Set up HAProxy for load balancing between Satellite servers.
+
+Install and configure HAProxy:
+# On satellite-primary (acting as load balancer)
+sudo dnf install -y haproxy
+
+# Backup original configuration
+sudo cp /etc/haproxy/haproxy.cfg /etc/haproxy/haproxy.cfg.backup
+Create HAProxy configuration:
+sudo vi /etc/haproxy/haproxy.cfg
+Add this configuration:
+
+global
+    log         127.0.0.1:514 local0
+    chroot      /var/lib/haproxy
+    stats       socket /var/lib/haproxy/stats
+    user        haproxy
+    group       haproxy
+    daemon
+
+defaults
+    mode                    http
+    log                     global
+    option                  httplog
+    option                  dontlognull
+    option                  http-server-close
+    option                  forwardfor       except 127.0.0.0/8
+    option                  redispatch
+    retries                 3
+    timeout http-request    10s
+    timeout queue           1m
+    timeout connect         10s
+    timeout client          1m
+    timeout server          1m
+    timeout http-keep-alive 10s
+    timeout check           10s
+    maxconn                 3000
+
+frontend satellite_frontend
+    bind *:443 ssl crt /etc/pki/katello/certs/katello-apache.crt
+    bind *:80
+    redirect scheme https if !{ ssl_fc }
+    default_backend satellite_backend
+
+backend satellite_backend
+    balance roundrobin
+    option httpchk GET /users/login
+    server satellite-primary satellite-primary:443 check ssl verify none
+    server satellite-capsule satellite-capsule:443 check ssl verify none backup
+
+listen stats
+    bind *:8404
+    stats enable
+    stats uri /stats
+    stats refresh 30s
+Start and enable HAProxy:
+sudo systemctl enable --now haproxy
+sudo systemctl status haproxy
+
+# Check HAProxy stats
+curl -k https://localhost:8404/stats
+Subtask 1.5: Configure Capsule Server for High Availability
+Set up a Capsule server to distribute load and provide redundancy.
+
+Install Satellite Capsule:
+# On satellite-capsule
+sudo dnf install -y satellite-capsule
+
+# Generate certificates on primary Satellite
+# On satellite-primary
+sudo capsule-certs-generate --foreman-proxy-fqdn satellite-capsule --certs-tar /root/satellite-capsule-certs.tar
+Transfer and install certificates:
+# Copy certificates to capsule server
+scp /root/satellite-capsule-certs.tar root@satellite-capsule:/root/
+
+# On satellite-capsule
+sudo satellite-installer --scenario capsule \
+    --certs-tar-file /root/satellite-capsule-certs.tar \
+    --foreman-proxy-register-in-foreman true \
+    --foreman-proxy-foreman-base-url https://satellite-primary \
+    --foreman-proxy-trusted-hosts satellite-primary \
+    --foreman-proxy-oauth-consumer-key $(sudo grep oauth_consumer_key /etc/foreman-proxy/settings.yml | cut -d' ' -f2) \
+    --foreman-proxy-oauth-consumer-secret $(sudo grep oauth_consumer_secret /etc/foreman-proxy/settings.yml | cut -d' ' -f2)
+Verify Capsule installation:
+# Check Capsule services
+sudo systemctl status foreman-proxy
+sudo systemctl status httpd
+
+# Test connectivity to primary Satellite
+curl -k https://satellite-primary/api/status
+Task 2: Set Up Disaster Recovery Procedures
+Subtask 2.1: Create Backup Strategy
+Implement comprehensive backup procedures for Satellite infrastructure.
+
+Install backup tools:
+# On backup-server
+sudo dnf install -y rsync postgresql-client tar gzip
+
+# Create backup directories
+sudo mkdir -p /backup/{satellite,database,configs}
+sudo chmod 755 /backup
+Create database backup script:
+sudo vi /usr/local/bin/satellite-db-backup.sh
+#!/bin/bash
+# Satellite Database Backup Script
+
+BACKUP_DIR="/backup/database"
+DATE=$(date +%Y%m%d_%H%M%S)
+DB_HOST="satellite-primary"
+DB_NAME="foreman"
+DB_USER="foreman"
+
+# Create backup directory
+mkdir -p $BACKUP_DIR/$DATE
+
+# Backup PostgreSQL database
+echo "Starting database backup..."
+pg_dump -h $DB_HOST -U $DB_USER -d $DB_NAME -f $BACKUP_DIR/$DATE/foreman_$DATE.sql
+
+# Backup Candlepin database
+pg_dump -h $DB_HOST -U candlepin -d candlepin -f $BACKUP_DIR/$DATE/candlepin_$DATE.sql
+
+# Compress backups
+gzip $BACKUP_DIR/$DATE/*.sql
+
+# Remove backups older than 30 days
+find $BACKUP_DIR -type d -mtime +30 -exec rm -rf {} \;
+
+echo "Database backup completed: $BACKUP_DIR/$DATE"
+Create configuration backup script:
+sudo vi /usr/local/bin/satellite-config-backup.sh
+#!/bin/bash
+# Satellite Configuration Backup Script
+
+BACKUP_DIR="/backup/configs"
+DATE=$(date +%Y%m%d_%H%M%S)
+SATELLITE_HOST="satellite-primary"
+
+# Create backup directory
+mkdir -p $BACKUP_DIR/$DATE
+
+# Backup important configuration directories
+echo "Backing up Satellite configurations..."
+
+# Backup using satellite-maintain
+ssh root@$SATELLITE_HOST "satellite-maintain backup offline --preserve-directory /tmp/satellite-backup-$DATE"
+
+# Copy backup to backup server
+rsync -avz root@$SATELLITE_HOST:/tmp/satellite-backup-$DATE/ $BACKUP_DIR/$DATE/
+
+# Cleanup remote backup
+ssh root@$SATELLITE_HOST "rm -rf /tmp/satellite-backup-$DATE"
+
+echo "Configuration backup completed: $BACKUP_DIR/$DATE"
+Make scripts executable and set up cron jobs:
+sudo chmod +x /usr/local/bin/satellite-db-backup.sh
+sudo chmod +x /usr/local/bin/satellite-config-backup.sh
+
+# Add to crontab for automated backups
+sudo crontab -e
+Add these cron entries:
+
+# Daily database backup at 2 AM
+0 2 * * * /usr/local/bin/satellite-db-backup.sh
+
+# Weekly configuration backup on Sundays at 3 AM
+0 3 * * 0 /usr/local/bin/satellite-config-backup.sh
+Subtask 2.2: Implement Disaster Recovery Procedures
+Create detailed disaster recovery procedures and scripts.
+
+Create disaster recovery documentation:
+sudo vi /root/satellite-dr-procedures.md
+# Satellite Disaster Recovery Procedures
+
+## Pre-Disaster Checklist
+- [ ] Verify backup integrity
+- [ ] Document current system state
+- [ ] Ensure secondary systems are ready
+- [ ] Test communication channels
+
+## Disaster Recovery Steps
+1. Assess damage and determine recovery strategy
+2. Prepare recovery environment
+3. Restore database from backup
+4. Restore configuration files
+5. Restart services and verify functionality
+6. Update DNS and load balancer configuration
+7. Validate client connectivity
+
+## Recovery Time Objectives (RTO)
+- Database restoration: 2 hours
+- Full system recovery: 4 hours
+- Client reconnection: 1 hour
+
+## Recovery Point Objectives (RPO)
+- Database: 24 hours (daily backups)
+- Configuration: 7 days (weekly backups)
+Create database restoration script:
+sudo vi /usr/local/bin/satellite-db-restore.sh
+#!/bin/bash
+# Satellite Database Restoration Script
+
+if [ $# -ne 1 ]; then
+    echo "Usage: $0 <backup_date>"
+    echo "Example: $0 20231201_020000"
+    exit 1
+fi
+
+BACKUP_DATE=$1
+BACKUP_DIR="/backup/database/$BACKUP_DATE"
+
+if [ ! -d "$BACKUP_DIR" ]; then
+    echo "Backup directory not found: $BACKUP_DIR"
+    exit 1
+fi
+
+echo "Starting database restoration from $BACKUP_DATE..."
+
+# Stop Satellite services
+satellite-maintain service stop
+
+# Drop and recreate databases
+sudo -u postgres psql -c "DROP DATABASE IF EXISTS foreman;"
+sudo -u postgres psql -c "DROP DATABASE IF EXISTS candlepin;"
+sudo -u postgres psql -c "CREATE DATABASE foreman OWNER foreman;"
+sudo -u postgres psql -c "CREATE DATABASE candlepin OWNER candlepin;"
+
+# Restore databases
+echo "Restoring Foreman database..."
+gunzip -c $BACKUP_DIR/foreman_$BACKUP_DATE.sql.gz | sudo -u postgres psql -d foreman
+
+echo "Restoring Candlepin database..."
+gunzip -c $BACKUP_DIR/candlepin_$BACKUP_DATE.sql.gz | sudo -u postgres psql -d candlepin
+
+# Start services
+satellite-maintain service start
+
+echo "Database restoration completed successfully!"
+Create full system restoration script:
+sudo vi /usr/local/bin/satellite-full-restore.sh
+#!/bin/bash
+# Satellite Full System Restoration Script
+
+if [ $# -ne 1 ]; then
+    echo "Usage: $0 <backup_date>"
+    exit 1
+fi
+
+BACKUP_DATE=$1
+CONFIG_BACKUP="/backup/configs/$BACKUP_DATE"
+DB_BACKUP="/backup/database/$BACKUP_DATE"
+
+echo "Starting full system restoration..."
+
+# Restore configurations
+if [ -d "$CONFIG_BACKUP" ]; then
+    echo "Restoring configurations..."
+    satellite-maintain restore $CONFIG_BACKUP
+else
+    echo "Configuration backup not found: $CONFIG_BACKUP"
+    exit 1
+fi
+
+# Restore database if available
+if [ -d "$DB_BACKUP" ]; then
+    echo "Restoring database..."
+    /usr/local/bin/satellite-db-restore.sh $BACKUP_DATE
+fi
+
+# Verify services
+echo "Verifying services..."
+satellite-maintain service status
+
+echo "Full system restoration completed!"
+Make restoration scripts executable:
+sudo chmod +x /usr/local/bin/satellite-db-restore.sh
+sudo chmod +x /usr/local/bin/satellite-full-restore.sh
+Subtask 2.3: Configure Monitoring and Alerting
+Set up monitoring to detect issues and trigger disaster recovery procedures.
+
+Install monitoring tools:
+# On satellite-primary
+sudo dnf install -y nagios-plugins-all mailx
+
+# Create monitoring script
+sudo vi /usr/local/bin/satellite-health-check.sh
+#!/bin/bash
+# Satellite Health Monitoring Script
+
+LOG_FILE="/var/log/satellite-health.log"
+EMAIL="admin@company.com"
+
+# Function to log messages
+log_message() {
+    echo "$(date): $1" >> $LOG_FILE
+}
+
+# Check Satellite services
+check_services() {
+    FAILED_SERVICES=""
+    
+    for service in httpd postgresql foreman dynflowd; do
+        if ! systemctl is-active --quiet $service; then
+            FAILED_SERVICES="$FAILED_SERVICES $service"
+        fi
+    done
+    
+    if [ -n "$FAILED_SERVICES" ]; then
+        log_message "CRITICAL: Failed services:$FAILED_SERVICES"
+        echo "CRITICAL: Satellite services failed:$FAILED_SERVICES" | mail -s "Satellite Alert" $EMAIL
+        return 1
+    fi
+    
+    return 0
+}
+
+# Check database connectivity
+check_database() {
+    if ! sudo -u postgres psql -d foreman -c "SELECT 1;" > /dev/null 2>&1; then
+        log_message "CRITICAL: Database connectivity failed"
+        echo "CRITICAL: Satellite database is not accessible" | mail -s "Satellite Database Alert" $EMAIL
+        return 1
+    fi
+    
+    return 0
+}
+
+# Check disk space
+check_disk_space() {
+    USAGE=$(df /var | tail -1 | awk '{print $5}' | sed 's/%//')
+    
+    if [ $USAGE -gt 90 ]; then
+        log_message "WARNING: Disk usage is ${USAGE}%"
+        echo "WARNING: Satellite disk usage is ${USAGE}%" | mail -s "Satellite Disk Alert" $EMAIL
+        return 1
+    fi
+    
+    return 0
+}
+
+# Main health check
+main() {
+    log_message "Starting health check"
+    
+    check_services
+    check_database
+    check_disk_space
+    
+    log_message "Health check completed"
+}
+
+main
+Set up automated monitoring:
+sudo chmod +x /usr/local/bin/satellite-health-check.sh
+
+# Add to crontab for regular monitoring
+sudo crontab -e
+Add this entry:
+
+# Health check every 5 minutes
+*/5 * * * * /usr/local/bin/satellite-health-check.sh
+Task 3: Perform Disaster Recovery Tests and Validation
+Subtask 3.1: Test Backup Procedures
+Validate that backup procedures are working correctly.
+
+Perform manual backup test:
+# Test database backup
+sudo /usr/local/bin/satellite-db-backup.sh
+
+# Verify backup files
+ls -la /backup/database/
+Test configuration backup:
+# Test configuration backup
+sudo /usr/local/bin/satellite-config-backup.sh
+
+# Verify backup contents
+ls -la /backup/configs/
+Validate backup integrity:
+# Create backup validation script
+sudo vi /usr/local/bin/validate-backups.sh
+#!/bin/bash
+# Backup Validation Script
+
+BACKUP_DIR="/backup"
+VALIDATION_LOG="/var/log/backup-validation.log"
+
+validate_db_backup() {
+    LATEST_DB_BACKUP=$(ls -t $BACKUP_DIR/database/ | head -1)
+    
+    if [ -z "$LATEST_DB_BACKUP" ]; then
+        echo "$(date): No database backups found" >> $VALIDATION_LOG
+        return 1
+    fi
+    
+    # Test if backup files can be read
+    for file in $BACKUP_DIR/database/$LATEST_DB_BACKUP/*.sql.gz; do
+        if ! gunzip -t "$file" 2>/dev/null; then
+            echo "$(date): Corrupted backup file: $file" >> $VALIDATION_LOG
+            return 1
+        fi
+    done
+    
+    echo "$(date): Database backup validation successful: $LATEST_DB_BACKUP" >> $VALIDATION_LOG
+    return 0
+}
+
+validate_config_backup() {
+    LATEST_CONFIG_BACKUP=$(ls -t $BACKUP_DIR/configs/ | head -1)
+    
+    if [ -z "$LATEST_CONFIG_BACKUP" ]; then
+        echo "$(date): No configuration backups found" >> $VALIDATION_LOG
+        return 1
+    fi
+    
+    # Check if backup directory contains expected files
+    if [ ! -f "$BACKUP_DIR/configs/$LATEST_CONFIG_BACKUP/config_files.tar.gz" ]; then
+        echo "$(date): Configuration backup incomplete: $LATEST_CONFIG_BACKUP" >> $VALIDATION_LOG
+        return 1
+    fi
+    
+    echo "$(date): Configuration backup validation successful: $LATEST_CONFIG_BACKUP" >> $VALIDATION_LOG
+    return 0
+}
+
+# Run validations
+validate_db_backup
+validate_config_backup
+Execute validation and review results:
+sudo chmod +x /usr/local/bin/validate-backups.sh
+sudo /usr/local/bin/validate-backups.sh
+
+# Review validation log
+cat /var/log/backup-validation.log
+Subtask 3.2: Simulate Disaster Scenarios
+Test disaster recovery procedures with controlled scenarios.
+
+Scenario 1: Database Corruption Simulation:
+# Create a test database corruption scenario
+echo "Simulating database corruption..."
+
+# Stop Satellite services
+sudo satellite-maintain service stop
+
+# Create a backup of current state
+sudo cp -r /var/lib/pgsql/data /var/lib/pgsql/data.backup
+
+# Simulate corruption by removing critical files
+sudo rm /var/lib/pgsql/data/pg_control
+
+# Try to start PostgreSQL (should fail)
+sudo systemctl start postgresql
+sudo systemctl status postgresql
+Test database restoration:
+# Find latest backup
+LATEST_BACKUP=$(ls -t /backup/database/ | head -1)
+echo "Using backup: $LATEST_BACKUP"
+
+# Restore from backup
+sudo /usr/local/bin/satellite-db-restore.sh $LATEST_BACKUP
+
+# Verify restoration
+sudo systemctl status postgresql
+sudo -u postgres psql -d foreman -c "SELECT count(*) FROM hosts;"
+Scenario 2: Configuration File Corruption:
+# Simulate configuration corruption
+sudo mv /etc/foreman /etc/foreman.corrupted
+
+# Test configuration restoration
+LATEST_CONFIG=$(ls -t /backup/configs/ | head -1)
+sudo satellite-maintain restore /backup/configs/$LATEST_CONFIG
+
+# Verify restoration
+ls -la /etc/foreman/
+sudo satellite-maintain service start
+Subtask 3.3: Validate High Availability Failover
+Test the high availability configuration and failover procedures.
+
+Test load balancer failover:
+# Check current HAProxy status
+curl -k https://localhost:8404/stats
+
+# Simulate primary server failure
+sudo systemctl stop httpd
+
+# Test if traffic fails over to capsule
+curl -k https://satellite-primary/users/login
+
+# Check HAProxy logs
+sudo tail -f /var/log/haproxy.log
+Test database replication failover:
+# On satellite-primary, check replication status
+sudo -u postgres psql -c "SELECT * FROM pg_stat_replication;"
+
+# Simulate primary database failure
+sudo systemctl stop postgresql
+
+# On satellite-secondary, promote to primary
+sudo -u postgres pg_promote
+
+# Update application configuration to use new primary
+sudo vi /etc/foreman/database.yml
+Validate client connectivity during failover:
+# On client systems, test Satellite connectivity
+subscription-manager status
+yum repolist
+
+# Check if clients can still communicate with Satellite
+curl -k https://satellite-primary/pub/
+Subtask 3.4: Performance and Recovery Time Testing
+Measure and validate recovery times against objectives.
+
+Create performance testing script:
+sudo vi /usr/local/bin/recovery-time-test.sh
+#!/bin/bash
+# Recovery Time Testing Script
+
+TEST_LOG="/var/log/recovery-time-test.log"
+
+log_with_time() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S'): $1" | tee -a $TEST_LOG
+}
+
+test_database_recovery() {
+    log_with_time "Starting database recovery test"
+    START_TIME=$(date +%s)
+    
+    # Simulate database failure and recovery
+    sudo systemctl stop postgresql
+    sleep 5
+    
+    # Start recovery
+    LATEST_BACKUP=$(ls -t /backup/database/ | head -1)
+    /usr/local/bin/satellite-db-restore.sh $LATEST_BACKUP
+    
+    END_TIME=$(date +%s)
+    RECOVERY_TIME=$((END_TIME - START_TIME))
+    
+    log_with_time "Database recovery completed in $RECOVERY_TIME seconds"
+    
+    # Validate recovery
+    if sudo -u postgres psql -d foreman -c "SELECT 1;" > /dev/null 2>&1; then
+        log_with_time "Database recovery validation: SUCCESS"
+    else
+        log_with_time "Database recovery validation: FAILED"
+    fi
+}
+
+test_service_recovery() {
+    log_with_time "Starting service recovery test"
+    START_TIME=$(date +%s)
+    
+    # Stop all Satellite services
+    sudo satellite-maintain service stop
+    
+    # Start services
+    sudo satellite-maintain service start
+    
+    # Wait for services to be fully operational
+    while ! curl -k https://localhost/users/login > /dev/null 2>&1; do
+        sleep 10
+    done
+    
+    END_TIME=$(date +%s)
+    RECOVERY_TIME=$((END_TIME - START_TIME))
+    
+    log_with_time "Service recovery completed in $RECOVERY_TIME seconds"
+}
+
+# Run tests
+test_database_recovery
+test_service_recovery
+
+log_with_time "Recovery time testing completed"
+Execute performance tests:
+sudo chmod +x /usr/local/bin/recovery-time-test.sh
+sudo /usr/local/bin/recovery-time-test.sh
+
+# Review test results
+cat /var/log/recovery-time-test.log
+Generate recovery report:
+sudo vi /usr/local/bin/generate-recovery-report.sh
+#!/bin/bash
+# Recovery Report Generation Script
+
+REPORT_FILE="/root/satellite-recovery-report-$(date +%Y%m%d).txt"
+
+cat > $REPORT_FILE << EOF
+Satellite Disaster Recovery Test Report
+Generated: $(date)
+
+=== BACKUP STATUS ===
+Database Backups:
+$(ls -la /backup/database/ | tail -5)
+
+Configuration Backups:
+$(ls -la /backup/configs/ | tail -5)
+
+=== RECOVERY TIME METRICS ===
+$(tail -20 /var/log/recovery-time-test.log)
+
+=== HIGH AVAILABILITY STATUS ===
+HAProxy Status:
+$(systemctl status haproxy --no-pager)
+
+Database Replication Status:
+$(sudo -u postgres psql -c "SELECT * FROM pg_stat_replication;" 2>/dev/null || echo "No replication active")
+
+=== SYSTEM HEALTH ===
+$(tail -10 /var/log/satellite-health.log)
+
+=== RECOMMENDATIONS ===
+- Review backup retention policies
+- Validate recovery time objectives
+- Test disaster recovery procedures monthly
+- Update documentation as needed
+
+EOF
+
+echo "Recovery report generated: $REPORT_FILE"
+Generate and review the report:
+sudo chmod +x /usr/local/bin/generate-recovery-report.sh
+sudo /usr/local/bin/generate-recovery-report.sh
+
+# Review the report
+cat /root/satellite-recovery-report-*.txt
+Troubleshooting Common Issues
+Database Replication Issues
+If PostgreSQL replication is not working:
+
+# Check replication status
+sudo -u postgres psql -c "SELECT * FROM pg_stat_replication;"
+
+# Verify network connectivity
+telnet satellite-secondary 5432
+
+# Check PostgreSQL logs
+sudo tail -f /var/lib/pgsql/data/log/postgresql-*.log
+HAProxy Configuration Issues
+If load balancing is not working:
+
+# Check HAProxy configuration syntax
+sudo haproxy -c -f /etc/haproxy/haproxy.cfg
+
+# Verify backend server status
+curl -k https://localhost:8404/stats
+
+# Check HAProxy logs
+sudo tail -f /var/log/haproxy.log
+Backup and Restoration Issues
+If backups are failing:
+
+# Check disk space
+df -h /backup
+
+# Verify permissions
+ls -la /backup/
+
+# Test database connectivity
+sudo -u postgres psql -c "SELECT version();"
+Conclusion
+In this comprehensive lab, you have successfully:
+
+Configured High Availability: Set up PostgreSQL streaming replication, HAProxy load balancing, and Capsule server redundancy to ensure Satellite remains available during component failures.
+
+Implemented Disaster Recovery: Created automated backup procedures for both database and configuration data, developed restoration scripts, and established comprehensive disaster recovery documentation.
+
+Validated Recovery Procedures: Performed thorough testing of backup integrity, simulated disaster scenarios, tested failover mechanisms, and measured recovery times against business objectives.
+
+Established Monitoring: Implemented health monitoring and alerting systems to detect issues early and trigger appropriate response procedures.
+
+This lab demonstrates critical skills for maintaining business continuity in enterprise environments. High availability and disaster recovery are essential for organizations that depend on Satellite for infrastructure management. The procedures and scripts you've created provide a solid foundation for protecting against data loss and minimizing downtime.
+
+Key Takeaways:
+
+Regular testing of backup and recovery procedures is essential
+Automation reduces recovery time and human error
+Monitoring and alerting enable proactive issue resolution
+Documentation and procedures must be kept current and accessible
+Recovery time and point objectives should align with business requirements
+These skills are directly applicable to the Red Hat Certified Specialist in Deployment and Systems Management exam and real-world enterprise environments where system reliability is paramount.
